@@ -13,6 +13,9 @@ def load_data(dataset):
         (images, labels), _ = \
             tf.keras.datasets.mnist.load_data()
 
+    elif dataset == 'fmnist':
+        (images, labels), _ = tf.keras.datasets.fashion_mnist.load_data()
+
     else:
         raise NotImplementedError(f"Unknown dataset {dataset}")
 
@@ -20,7 +23,7 @@ def load_data(dataset):
         images = images[..., tf.newaxis]
 
     dataset = tf.data.Dataset.from_tensor_slices(
-        (tf.cast(images / 255.0, tf.float32),
+        (tf.cast((images - 127.5) / 127.5, tf.float32),
          tf.cast(labels, tf.int64))
     )
 
