@@ -28,6 +28,7 @@ def train_generator(generator, discriminator, generator_optim, batch_size, laten
         x_fake = generator(z)
         d_fake = discriminator(x_fake)
         g_loss = -1 * w_loss(d_fake)
+        # g_loss = g_loss_fn(d_fake)
 
     # Horovod: add Horovod Distributed GradientTape.
     tape = hvd.DistributedGradientTape(tape)
@@ -58,8 +59,12 @@ def train_discriminator(generator, discriminator, discriminator_optim, batch_siz
         d_fake = discriminator(x_fake)
         d_real = discriminator(x_real)
 
-        gradient_penalty_loss = gp_loss(discriminator, x_real, x_fake)
+        # d_loss = d_loss_fn(d_real, d_fake)
 
+        gradient_penalty_loss = gp_loss(discriminator, x_real, x_fake)
+        # gradient_penalty_loss = gradient_penalty(discriminator, x_real, x_fake, mode='wgan-gp')
+
+        # d_loss = sum(d_loss) + gradient_penalty_loss
         d_loss = w_loss(d_fake) - w_loss(d_real) + 10 * gradient_penalty_loss
 
     # Horovod: add Horovod Distributed GradientTape.
@@ -115,6 +120,10 @@ def train(train_data, dataset_name, latent_dim, n_critic, epoch_size, epochs, le
     g_loss = None  # Placeholder
 
     for epoch in range(1, epochs + 1):
+
+        if hvd.rank() == 0:
+            print(f'\n Epoch {epoch} \n')
+
         sample_images(generator, latent_dim=latent_dim, dataset_name=dataset_name, phase=1, step=epoch)
         for batch, (images, labels) in enumerate(train_data.take(num_epoch_steps)):
             is_first_batch = batch == 0
@@ -138,7 +147,7 @@ def train(train_data, dataset_name, latent_dim, n_critic, epoch_size, epochs, le
                                          is_first_batch)
 
             if batch % sample_interval == 0 and hvd.local_rank() == 0:
-                print(f'Batch {batch}, D Loss {d_loss}, G Loss {g_loss}')
+                print(f'Batch {batch:03} \t Discriminator Loss: {d_loss:.4f} \t Generator Loss: {g_loss:.4f}')
 
         # Horovod: save checkpoints only on worker 0 to prevent other workers from
         # corrupting it.
@@ -150,12 +159,12 @@ def train(train_data, dataset_name, latent_dim, n_critic, epoch_size, epochs, le
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', type=str, default='mnist')
+    parser.add_argument('--dataset', type=str, default='cifar10')
     parser.add_argument('--latent_dim', type=int, default=128)
     parser.add_argument('--n_critic', type=int, default=3)
-    parser.add_argument('--epochs', type=int, default=32)
+    parser.add_argument('--epochs', type=int, default=200)
     parser.add_argument('--epoch-size', type=int, default=50000)
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
+    parser.add_argument('--learning_rate', type=float, default=5e-4)
     parser.add_argument('--epochs-per-phase', type=int, default=512)
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--sample_interval', type=int, default=25, help='How often to sample and save images.')

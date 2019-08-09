@@ -1,7 +1,7 @@
 import tensorflow as tf
 from tensorflow.python.keras import Model, Sequential
 from tensorflow.python.keras.layers import Conv2D, Dense, Conv2DTranspose, BatchNormalization, \
-    Activation, UpSampling2D, AveragePooling2D, ReLU, Input
+    Activation, UpSampling2D, AveragePooling2D, ReLU, Input, LayerNormalization
 
 
 def build_generator(latent_dim,
@@ -35,7 +35,7 @@ def build_discriminator(input_shape=(32, 32, 3),
                         base_dim=64,
                         n_downsamplings=3,
                         norm='batch_norm'):
-    norm = BatchNormalization
+    norm = LayerNormalization
 
     inputs = Input(shape=input_shape)
 
@@ -44,11 +44,10 @@ def build_discriminator(input_shape=(32, 32, 3),
 
     for i in range(n_downsamplings - 1):
         d = min(base_dim * 2 ** (i + 1), base_dim * 8)
-        x = Conv2D(d, 4, strides=2, padding='same', use_bias=False)(x)
+        x = Conv2D(d, 4, strides=2, padding='same')(x)
         x = norm()(x)
         x = ReLU()(x)
 
-    x = Conv2D(latent_dim, 4, strides=1, padding='valid')(x)
-    x = Dense(1)(x)
+    x = Conv2D(1, 4, strides=1, padding='valid')(x)
 
     return Model(inputs=inputs, outputs=x, name='Discriminator')

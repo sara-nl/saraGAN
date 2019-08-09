@@ -18,7 +18,9 @@ def sample_images(generator, latent_dim, dataset_name, phase, step):
             img = gen_imgs[cnt, :, :, :]
             if img.shape[-1] == 1:
                 img = img.squeeze()
-            axs[i, j].imshow(img)
+                axs[i, j].imshow(img, cmap='gray')
+            else:
+                axs[i, j].imshow(img)
             axs[i, j].axis('off')
             cnt += 1
 
