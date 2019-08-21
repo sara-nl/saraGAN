@@ -27,6 +27,7 @@ def build_generator(latent_dim,
     x = tf.expand_dims(x, axis=1)
 
     n_upsamplings = int(np.log2(img_shape[1])) - 2
+
     d = min(base_dim * 2 ** (n_upsamplings - 1), base_dim * 8)
     x = Conv2DTranspose(d, 4, strides=2, padding='valid', use_bias=False)(x)
     x = norm()(x)
