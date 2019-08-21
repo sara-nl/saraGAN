@@ -4,6 +4,7 @@ import tensorflow as tf
 import horovod.tensorflow as hvd
 import argparse
 import sys
+import datetime
 
 from loss import WassersteinLoss, GradientPenaltyLoss
 from networks import build_generator, build_discriminator
@@ -143,6 +144,7 @@ def train(train_data, dataset_name, latent_dim, base_dim, n_critic,
     checkpoint_dir = './checkpoints'
     checkpoint_generator = tf.train.Checkpoint(model=generator, optimizer=generator_optim)
     checkpoint_discriminator = tf.train.Checkpoint(model=discriminator, optimizer=discriminator_optim)
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M")
 
     g_loss = None  # Placeholder
 
@@ -155,7 +157,7 @@ def train(train_data, dataset_name, latent_dim, base_dim, n_critic,
 
         if hvd.rank() == 0:
             print(f'\n Epoch {epoch} \n')
-            sample_images(generator, labels_sample, latent_dim=latent_dim, dataset_name=dataset_name, phase=1, step=epoch)
+            sample_images(generator, labels_sample, latent_dim=latent_dim, dataset_name=dataset_name, phase=1, step=epoch, timestamp=timestamp)
 
         for batch_idx, batch in enumerate(train_data.take(num_epoch_steps)):
 
@@ -225,7 +227,9 @@ if __name__ == '__main__':
         for k, v in sorted(vars(args).items()):
             print("\t{0}: {1}".format(k, v))
 
+    print("Loading data...")
     epoch_size, n_classes, dataset = load_data(args.dataset, args.batch_size)
+    print("Done!")
 
     if not args.conditional:
         n_classes = None

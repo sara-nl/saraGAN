@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import tensorflow as tf
 
 
-def sample_images(generator, labels, latent_dim, dataset_name, phase, step):
+def sample_images(generator, labels, latent_dim, dataset_name, phase, step, timestamp):
     r, c = 5, 5
     noise = tf.random.normal(shape=(r * c, latent_dim))
 
@@ -29,7 +29,7 @@ def sample_images(generator, labels, latent_dim, dataset_name, phase, step):
             axs[i, j].axis('off')
             cnt += 1
 
-    save_dir = os.path.join('images', dataset_name, str(phase))
+    save_dir = os.path.join('images', dataset_name, timestamp, str(phase))
     if not os.path.isdir(save_dir):
         os.makedirs(save_dir)
 
