@@ -94,7 +94,12 @@ def train_discriminator(generator, discriminator, discriminator_optim, batch_siz
 def train(train_data, dataset_name, latent_dim, base_dim, n_critic,
           epoch_size, epochs, learning_rate, sample_interval, n_classes):
 
-    images_sample, labels_sample = next(iter(train_data.take(1)))
+    batch = next(iter(train_data.take(1)))
+
+    if len(batch) == 2:
+        images_sample, labels_sample = batch
+    else:
+        images_sample = batch
 
     if n_classes is None:
         labels_sample = None
@@ -152,9 +157,14 @@ def train(train_data, dataset_name, latent_dim, base_dim, n_critic,
             print(f'\n Epoch {epoch} \n')
             sample_images(generator, labels_sample, latent_dim=latent_dim, dataset_name=dataset_name, phase=1, step=epoch)
 
-        for batch, (images, labels) in enumerate(train_data.take(num_epoch_steps)):
+        for batch_idx, batch in enumerate(train_data.take(num_epoch_steps)):
 
-            is_first_batch = batch == 0
+            if len(batch) == 2:
+                images, labels = batch
+            else:
+                images = batch
+
+            is_first_batch = batch_idx == 0
 
             # Remove the labels if we don't want to condition.
             if n_classes is None:
@@ -173,7 +183,7 @@ def train(train_data, dataset_name, latent_dim, base_dim, n_critic,
                                          labels,
                                          is_first_batch)
 
-            if batch % n_critic == 0:
+            if batch_idx % n_critic == 0:
                 g_loss = train_generator(generator,
                                          discriminator,
                                          generator_optim,
@@ -183,8 +193,8 @@ def train(train_data, dataset_name, latent_dim, base_dim, n_critic,
                                          labels,
                                          is_first_batch)
 
-            if batch % sample_interval == 0 and hvd.rank() == 0:
-                print(f'Batch {batch:03} \t Discriminator Loss: {d_loss:.4f} \t Generator Loss: {g_loss:.4f}')
+            if batch_idx % sample_interval == 0 and hvd.rank() == 0:
+                print(f'Batch {batch_idx:03} \t Discriminator Loss: {d_loss:.4f} \t Generator Loss: {g_loss:.4f}')
 
         # Horovod: save checkpoints only on worker 0 to prevent other workers from
         # corrupting it.
@@ -215,7 +225,7 @@ if __name__ == '__main__':
         for k, v in sorted(vars(args).items()):
             print("\t{0}: {1}".format(k, v))
 
-    epoch_size, n_classes, dataset = load_data(args.dataset)
+    epoch_size, n_classes, dataset = load_data(args.dataset, args.batch_size)
 
     if not args.conditional:
         n_classes = None
