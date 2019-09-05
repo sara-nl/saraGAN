@@ -105,7 +105,8 @@ def compute_loss(real_images, real_logit, fake_logit, tape):
     d_loss_gan = tf.nn.softplus(fake_logit) + tf.nn.softplus(-real_logit)
     real_loss = tf.reduce_sum(real_logit)
     # print(tape.gradient(real_loss, real_images))
-    real_grads = tape.gradient(real_loss, [real_images])[0]
+    real_grads = tape.gradient(real_loss, real_images)[0]
+    print('HERE3')
     print(real_grads.shape)
     r1_penalty = tf.reduce_sum(tf.square(real_grads), axis=[1, 2, 3])
     # r1_penalty = tf.reduce_mean(r1_penalty)
@@ -355,8 +356,10 @@ def upscale_conv(x, channels, kernel, gain=np.sqrt(2), lrmul=1.0):
 
     return x
 
+
+# CvL: Should no longer be used for our images, which are 
 def torgb(x, res):
-    x = conv(x, channels=3, kernel=1, stride=1, gain=1.0, lrmul=1.0)
+    x = conv(x, channels=1, kernel=1, stride=1, gain=1.0, lrmul=1.0)
     x = apply_bias(x, lrmul=1.0)
     return x
 
