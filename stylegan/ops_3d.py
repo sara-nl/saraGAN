@@ -106,8 +106,6 @@ def compute_loss(real_images, real_logit, fake_logit, tape):
     real_loss = tf.reduce_sum(real_logit)
     # print(tape.gradient(real_loss, real_images))
     real_grads = tape.gradient(real_loss, real_images)[0]
-    print('HERE3')
-    print(real_grads.shape)
     r1_penalty = tf.reduce_sum(tf.square(real_grads), axis=[1, 2, 3])
     # r1_penalty = tf.reduce_mean(r1_penalty)
     d_loss = d_loss_gan + r1_penalty * (r1_gamma * 0.5)
@@ -422,6 +420,17 @@ def apply_bias(x, lrmul):
 ##################################################################################
 
 # ----------------------------------------------------------------------------
+# CvL: tf.nn.conv3d in newer versions of tensorflow should automatically fall back to depthwise if the shape if the filter is smaller than input in shape.
+# https://github.com/tensorflow/tensorflow/pull/31492
+# However, it has been merged into tensorflow master, but not yet in a tagged version (and definetely not in 2.0rc0, which I have installed)
+# Thus, we implement a manual solution, which according to the PR is about 30% slower or so.
+# We slice manually, and then invoke the normal conv3d on the sliced inputs, before concatenating again.
+def conv3d_depthwise(x, f, strides, padding):
+    x = tf.split(x, x.shape[-1], axis=-1)
+    filters = tf.split(f, f.shape[-2], axis=-2) # f.shape[-2], axis=-2 because the input channels are the one-but-last argument
+    x = tf.concat([tf.nn.conv3d(i, f, strides=strides, padding=padding) for i, f in zip(x, filters)], axis=-1)
+    return x
+
 # Primitive ops for manipulating 4D activation tensors.
 # The gradients of these are not necessary efficient or even meaningful.
 def _blur3d(x, f, normalize=True, flip=False, stride=1):
@@ -445,15 +454,12 @@ def _blur3d(x, f, normalize=True, flip=False, stride=1):
     if f.shape == (1, 1, 1) and f[0, 0, 0] == 1:
         return x
     
-    print(f.shape)
-
     # Convolve using depthwise_conv3d.
     orig_dtype = x.dtype
     x = tf.cast(x, tf.float32)  # tf.nn.depthwise_conv3d() doesn't support fp16
     f = tf.constant(f, dtype=x.dtype, name='filter')
     strides = [1, stride, stride, stride, 1]
-    print(f.shape)
-    x = tf.nn.conv3d(x, f, strides=strides, padding='SAME') # conv3d automatically falls back to depthwise if weight in shape smaller than input in shape.
+    x = conv3d_depthwise(x, f, strides=strides, padding='SAME') # conv3d automatically falls back to depthwise if weight in shape smaller than input in shape.
     x = tf.cast(x, orig_dtype)
     return x
 
@@ -552,12 +558,10 @@ class Downscale3D(layers.Layer):
         self.factor = factor
         
     def call(self, inputs):
-        
         x = inputs
         @tf.custom_gradient
         def func(x):
             y = _downscale3d(x, self.factor)
-
             @tf.custom_gradient
             def grad(dy):
                 dx = _upscale3d(dy, self.factor, gain=1 / self.factor ** 2)
@@ -569,7 +573,6 @@ class Downscale3D(layers.Layer):
 
 def downscale3d(x, factor=2):
     return Downscale3D(factor)(x)
-
 
 class MinibatchStdLayer(layers.Layer):
     def __init__(self, group_size=4, num_new_features=1):
