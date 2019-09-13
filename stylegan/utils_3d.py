@@ -7,7 +7,7 @@ from functools import partial
 
 import tensorflow as tf
 # import tensorflow.contrib.slim as slim
-import cv2
+#import cv2
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE
 
