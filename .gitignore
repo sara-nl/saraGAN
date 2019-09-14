@@ -2,3 +2,7 @@
 .DS_Store
 .idea/
 *.pyc
+logs/
+checkpoints/
+*.out
+.ipynb_checkpoints/
