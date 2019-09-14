@@ -140,7 +140,7 @@ class StyleGAN(object):
             # facial features, eye
             for res, n_f in middle_styles.items():
                 x = synthesis_block(x, res, w_broadcasted, layer_index, n_f)
-                img = torgb(x, res, sn=self.sn)
+                img = torgb(x, res)
                 images_out = upscale3d(images_out)
                 images_out = smooth_transition(images_out, img, res, resolutions[-1], alpha)
 
@@ -150,7 +150,7 @@ class StyleGAN(object):
             # color scheme
             for res, n_f in fine_styles.items():
                 x = synthesis_block(x, res, w_broadcasted, layer_index, n_f)
-                img = torgb(x, res, sn=self.sn)
+                img = torgb(x, res)
                 images_out = upscale3d(images_out)
                 images_out = smooth_transition(images_out, img, res, resolutions[-1], alpha)
 
