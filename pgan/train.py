@@ -15,7 +15,7 @@ for i in range(len(physical_devices)):
     tf.config.experimental.set_memory_growth(physical_devices[i], True)
 
 from network import make_generator, make_discriminator, get_training_functions
-from utils import load_lidc_idri_dataset_from_tfrecords, generate_gif, print_gpu_info, print_cpu_info
+from utils import load_lidc_idri_dataset_from_tfrecords, generate_gif, print_gpu_info, print_cpu_info, transform_batch_to_image_grid, save_array_as_gif
 from loss import wasserstein_loss, gradient_penalty_loss
 
 
@@ -184,10 +184,14 @@ def main(args):
                 generator.load_weights(os.path.join(checkpoint_path_prev, 'generator.h5'), by_name=True)
                 discriminator.load_weights(os.path.join(checkpoint_path_prev, 'discriminator.h5'), by_name=True)
         
-        # image_dir = os.path.join('logs', timestamp)
-        # z = tf.random.normal(shape=(batch_size, latent_dim))
-        # fakes = generator([z, alpha])
-        # generate_gif(fakes[random_indices].squeeze(), originals[random_indices].squeeze(), image_dir, epoch)
+        image_dir = os.path.join('logs', timestamp, f'phase_{phase}_start.gif')
+        z = tf.random.normal(shape=(batch_size, args.latent_dim))
+        alpha = tf.fill((batch_size, 1, 1, 1, 1), 1.0)
+        fakes = generator([z, alpha]).numpy().squeeze()
+        num_images = int(10 - np.log2(fakes.shape[1])) ** 2
+        random_indices = np.random.choice(fakes.shape[0], num_images)
+        img = transform_batch_to_image_grid(fakes[random_indices])
+        save_array_as_gif(image_dir, img)
 
         if (args.horovod and hvd.rank() == 0) or not args.horovod:
             print("\n\t\t\tStarting mixing epochs\t\t\t\n")
