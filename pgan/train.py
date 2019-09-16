@@ -14,7 +14,7 @@ physical_devices = tf.config.experimental.list_physical_devices('GPU')
 for i in range(len(physical_devices)):
     tf.config.experimental.set_memory_growth(physical_devices[i], True)
 
-from network_hvd import make_generator, make_discriminator, get_training_functions
+from network import make_generator, make_discriminator, get_training_functions
 from utils import load_lidc_idri_dataset_from_tfrecords, generate_gif, print_gpu_info, print_cpu_info
 from loss import wasserstein_loss, gradient_penalty_loss
 
@@ -126,16 +126,15 @@ def main(args):
     log_dir = os.path.join('logs', timestamp, 'summaries')
     summary_writer = tf.summary.create_file_writer(log_dir)
     
+    num_phases = int(np.log2(args.final_resolution) - 1)
     if (args.horovod and hvd.rank() == 0) or not args.horovod:
-        print(f"Number of phases is {args.num_phases}, final output resolution will be {2 * 2 ** args.num_phases}")
+        print(f"Number of phases is {num_phases}, final output resolution will be {2 * 2 ** num_phases}")
     
-    for phase in range(1, args.num_phases + 1):
-        
-        if (args.horovod and hvd.rank() == 0) or not args.horovod:
-            print(f'\n|\t\t\tPhase {phase}\t\t\t|\n')
+    for phase in range(args.starting_phase, num_phases + 1):
         
         size = 2 * 2 ** phase
-        tfr_path = args.tfrecords_path + f'tfrecords_new_{size}x{size}x{size}/'
+       
+        tfr_path = args.tfrecords_path + f'tfrecords_{size}x{size}x{size}/'
         
         if not os.path.exists(tfr_path):
             raise ValueError(f"Path doesn't exist: {tfr_path}")
@@ -143,21 +142,29 @@ def main(args):
         dataset_size = len(os.listdir(tfr_path))
         shape = (size, size, size, 1)
         
-        batch_size = 512 // size
+        if args.phase_1_batch_size:
+            batch_size = args.phase_1_batch_size // size
+        else:
+            batch_size = 512 // size
+        batch_size = max(1, batch_size)
+        
+        if (args.horovod and hvd.rank() == 0) or not args.horovod:
+            print(f'\n|\t\t\tPhase: {phase}, Resolution: {size}, Batch Size: {batch_size}\t\t\t|\n')
+        
         dataset = load_lidc_idri_dataset_from_tfrecords(tfr_path, batch_size=batch_size, shape=shape)
         epoch_size = dataset_size // batch_size
         
-        generator = make_generator(phase, args.num_phases, args.base_dim, args.latent_dim)
-        discriminator = make_discriminator(phase, args.num_phases, args.base_dim, shape, args.latent_dim)
+        generator = make_generator(phase, num_phases, args.base_dim, args.latent_dim)
+        discriminator = make_discriminator(phase, num_phases, args.base_dim, shape, args.latent_dim)
         
         if (args.horovod and hvd.rank() == 0) or not args.horovod:
             print(generator.summary())
             print(discriminator.summary())
         
         if args.horovod:
-        
-            generator_optim = tf.optimizers.Adam(1e-5 * hvd.size(), beta_1=0.5, beta_2=0.9)
-            discriminator_optim = tf.optimizers.Adam(1e-5 * hvd.size(), beta_1=0.5, beta_2=0.9)
+            # Come up with a generalizable approach.
+            generator_optim = tf.optimizers.Adam(1e-4 * hvd.size(), beta_1=0.5, beta_2=0.9)
+            discriminator_optim = tf.optimizers.Adam(1e-4 * hvd.size(), beta_1=0.5, beta_2=0.9)
             generator_optim = hvd.DistributedOptimizer(generator_optim)
             discriminator_optim = hvd.DistributedOptimizer(discriminator_optim)
         else:
@@ -246,10 +253,12 @@ def main(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('tfrecords_path', type=str)
-    parser.add_argument('num_phases', type=int)
+    parser.add_argument('final_resolution', type=int)
+    parser.add_argument('--starting_phase', type=int, default=1)
     parser.add_argument('--base_dim', type=int, default=128)
     parser.add_argument('--latent_dim', type=int, default=128)
     parser.add_argument('--training_ratio', type=int, default=1)
+    parser.add_argument('--phase_1_batch_size', type=int, default=None)
     parser.add_argument('--gradient_penalty_weight', type=int, default=10)
     parser.add_argument('--mixing_epochs', type=int, default=256)
     parser.add_argument('--stabilizing_epochs', type=int, default=256)
