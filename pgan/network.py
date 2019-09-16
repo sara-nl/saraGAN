@@ -20,8 +20,8 @@ class GeneratorBlock(keras.Sequential):
         self.add(layers.Convolution3D(filters, (3, 3, 3), padding='same'))
         self.add(layers.LeakyReLU())
 
-        # self.add(layers.Convolution3D(filters, (3, 3, 3), padding='same'))
-        # self.add(layers.LeakyReLU())
+        self.add(layers.Convolution3D(filters, (3, 3, 3), padding='same'))
+        self.add(layers.LeakyReLU())
         
         # self.add(layers.Convolution3D(filters, (3, 3, 3), padding='same'))
         # self.add(layers.LeakyReLU())
@@ -38,8 +38,8 @@ def make_generator(phase, num_phases, base_dim, latent_dim):
         layers.Dense(4 * 4 * 4 * filters),
         layers.LeakyReLU(),
         layers.Reshape((4, 4, 4, filters)),
-        # layers.Convolution3D(filters, (3, 3, 3), padding='same'),
-        # layers.LeakyReLU(),
+        layers.Convolution3D(filters, (3, 3, 3), padding='same'),
+        layers.LeakyReLU(),
         # layers.Convolution3D(filters, (3, 3, 3), padding='same'),
         # layers.LeakyReLU()
     ), name='generator_in')(z)
@@ -66,8 +66,8 @@ def make_generator(phase, num_phases, base_dim, latent_dim):
 class DiscriminatorBlock(keras.Sequential):
     def __init__(self, filters, **kwargs):
         super(DiscriminatorBlock, self).__init__(**kwargs)
-        # self.add(layers.Conv3D(filters, 3, padding='same'))
-        # self.add(layers.LeakyReLU())
+        self.add(layers.Conv3D(filters, 3, padding='same'))
+        self.add(layers.LeakyReLU())
         
         # self.add(layers.Conv3D(filters, 3, padding='same'))
         # self.add(layers.LeakyReLU())
@@ -101,8 +101,8 @@ def make_discriminator(phase, num_phases, base_dim, img_shape, latent_dim):
     x = keras.Sequential((
         # layers.Conv3D(filters, (3, 3, 3), padding='same'), 
         # layers.LeakyReLU(),
-        # layers.Conv3D(filters, (3, 3, 3), padding='same'), 
-        # layers.LeakyReLU(),
+        layers.Conv3D(filters, (3, 3, 3), padding='same'), 
+        layers.LeakyReLU(),
         layers.Flatten(),
         layers.Dense(latent_dim),
         layers.LeakyReLU(),

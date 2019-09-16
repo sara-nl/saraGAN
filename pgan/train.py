@@ -149,7 +149,7 @@ def main(args):
         batch_size = max(1, batch_size)
         
         if (args.horovod and hvd.rank() == 0) or not args.horovod:
-            print(f'\n|\t\t\tPhase: {phase}, Resolution: {size}, Batch Size: {batch_size}\t\t\t|\n')
+            print(f'\n|\t\t\tPhase: {phase} \t Resolution: {size} \t Batch Size: {batch_size}\t\t\t|\n')
         
         dataset = load_lidc_idri_dataset_from_tfrecords(tfr_path, batch_size=batch_size, shape=shape)
         epoch_size = dataset_size // batch_size
@@ -163,8 +163,12 @@ def main(args):
         
         if args.horovod:
             # Come up with a generalizable approach.
-            generator_optim = tf.optimizers.Adam(1e-4 * hvd.size(), beta_1=0.5, beta_2=0.9)
-            discriminator_optim = tf.optimizers.Adam(1e-4 * hvd.size(), beta_1=0.5, beta_2=0.9)
+            learning_rate = 1e-3 * np.log2(2 * hvd.size())
+            if hvd.rank() == 0:
+                print(f"Learning rate: {learning_rate}")
+            generator_optim = tf.optimizers.Adam(learning_rate, beta_1=0.5, beta_2=0.9)
+            discriminator_optim = tf.optimizers.Adam(learning_rate, beta_1=0.5, beta_2=0.9)
+            
             generator_optim = hvd.DistributedOptimizer(generator_optim)
             discriminator_optim = hvd.DistributedOptimizer(discriminator_optim)
         else:
@@ -180,6 +184,11 @@ def main(args):
                 generator.load_weights(os.path.join(checkpoint_path_prev, 'generator.h5'), by_name=True)
                 discriminator.load_weights(os.path.join(checkpoint_path_prev, 'discriminator.h5'), by_name=True)
         
+        # image_dir = os.path.join('logs', timestamp)
+        # z = tf.random.normal(shape=(batch_size, latent_dim))
+        # fakes = generator([z, alpha])
+        # generate_gif(fakes[random_indices].squeeze(), originals[random_indices].squeeze(), image_dir, epoch)
+
         if (args.horovod and hvd.rank() == 0) or not args.horovod:
             print("\n\t\t\tStarting mixing epochs\t\t\t\n")
             
