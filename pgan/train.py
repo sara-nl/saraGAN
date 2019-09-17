@@ -10,9 +10,9 @@ import numpy as np
 import horovod.tensorflow as hvd
 # from tensorflow.python.eager import profiler
 
-physical_devices = tf.config.experimental.list_physical_devices('GPU')
-for i in range(len(physical_devices)):
-    tf.config.experimental.set_memory_growth(physical_devices[i], True)
+GPUS = tf.config.experimental.list_physical_devices('GPU')
+for gpu in GPUS:
+    tf.config.experimental.set_memory_growth(gpu, True)
 
 from network import make_generator, make_discriminator, get_training_functions
 from utils import load_lidc_idri_dataset_from_tfrecords, generate_gif, print_gpu_info, print_cpu_info, transform_batch_to_image_grid, save_array_as_gif
@@ -143,7 +143,7 @@ def main(args):
         shape = (size, size, size, 1)
         
         if args.phase_1_batch_size:
-            batch_size = args.phase_1_batch_size // size
+            batch_size = args.phase_1_batch_size // phase
         else:
             batch_size = 512 // size
         batch_size = max(1, batch_size)
@@ -217,7 +217,7 @@ def main(args):
             horovod=args.horovod
         )
         
-        if tf.test.gpu_device_name():
+        if GPUS:
             print_fn = print_gpu_info
         else:
             print_fn = print_cpu_info
@@ -249,6 +249,16 @@ def main(args):
         )
         # profiler_result = profiler.stop()
         # profiler.save(log_dir, profiler_result)
+        
+        image_dir = os.path.join('logs', timestamp, f'phase_{phase}_end.gif')
+        z = tf.random.normal(shape=(batch_size, args.latent_dim))
+        alpha = tf.fill((batch_size, 1, 1, 1, 1), 1.0)
+        fakes = generator([z, alpha]).numpy().squeeze()
+        num_images = int(10 - np.log2(fakes.shape[1])) ** 2
+        random_indices = np.random.choice(fakes.shape[0], num_images)
+        img = transform_batch_to_image_grid(fakes[random_indices])
+        save_array_as_gif(image_dir, img)       
+        
         if (args.horovod and hvd.rank() == 0) or not args.horovod:
             print_fn()
             checkpoint_path = os.path.join('checkpoints', f'phase_{phase}')
@@ -284,6 +294,9 @@ if __name__ == '__main__':
         if hvd.rank() == 0:
             print(f"\n\n Using Horovod with global size {hvd.size()} and local size {hvd.local_size()}\n\n")
         
-        print(hvd.rank())
+        print(f"Rank {hvd.rank()} reporting!")
+
+        if GPUS:
+            tf.config.experimental.set_visible_devices(GPUS[hvd.local_rank()], 'GPU')
             
     main(args)
