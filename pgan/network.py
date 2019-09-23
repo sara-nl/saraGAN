@@ -2,30 +2,110 @@ import tensorflow as tf
 from tensorflow.python import keras
 from tensorflow.python.keras.layers.merge import _Merge
 from tensorflow.python.keras import layers
-import math
+import numpy as np
 import horovod.tensorflow as hvd
 
 from loss import wasserstein_loss, gradient_penalty_loss
 
 def num_filters(phase, num_phases, base_dim):
-    num_downscales = int(math.log2(base_dim / 16))
+    num_downscales = int(np.log2(base_dim / 16))
     filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
     return filters
+
+class ChannelNormalization(tf.keras.layers.Layer):
+    # initialize the layer
+    def __init__(self, **kwargs):
+        super(ChannelNormalization, self).__init__(**kwargs)
+
+    # perform the operation
+    def call(self, inputs):
+        return inputs * tf.math.rsqrt(tf.reduce_mean(tf.square(inputs), axis=-1, keepdims=True) + 1e-8)
+
+    # define the output shape of the layer
+    def compute_output_shape(self, input_shape):
+        return input_shape
+
+
+def get_wscale(shape, gain=np.sqrt(2)):
+    fan_in = np.prod(shape[:-1])
+    wscale = gain / (fan_in ** (1 / 2)) # He init
+    # wscale = gain / np.sqrt(fan_in) # He init
+    return wscale
+
+
+class Conv3D(tf.keras.layers.Layer):
+    def __init__(self, channels_out, kernel, 
+                 strides=(1, 1, 1, 1, 1), padding='SAME', gain=np.sqrt(2), **kwargs):
+        super(Conv3D, self).__init__(**kwargs)
+        assert isinstance(kernel, int)
+        self.kernel = kernel
+        self.channels_out = channels_out
+        self.gain = gain
+        self.strides = strides
+        self.padding = padding.upper()
+    
+    
+    def build(self, input_shape):
+        weight_shape = [self.kernel, self.kernel, self.kernel, input_shape[-1], self.channels_out]
+        self.wscale = get_wscale(weight_shape, self.gain)
+        initializer = tf.random_normal_initializer(stddev=self.wscale)
+        self.kernel = self.add_weight("kernel",
+                                      initializer=initializer,
+                                      shape=weight_shape)
+        initializer = tf.zeros_initializer()
+        self.bias = self.add_weight("bias",
+                                    initializer=initializer,
+                                    shape=(self.channels_out,))
+        
+    def call(self, inputs):
+        return tf.nn.conv3d(inputs, self.kernel * self.wscale, self.strides, self.padding) + self.bias
+
+    
+class Dense(tf.keras.layers.Layer):
+    def __init__(self, channels_out, gain=np.sqrt(2), **kwargs):
+        super(Dense, self).__init__(**kwargs)
+        self.channels_out = channels_out
+        self.gain = gain
+
+    def build(self, input_shape):
+        weight_shape = (input_shape[-1], self.channels_out)
+        self.wscale = get_wscale(weight_shape, self.gain)
+        initializer = tf.random_normal_initializer()
+        self.kernel = self.add_weight("kernel",
+                                      initializer=initializer,
+                                      shape=weight_shape)
+        
+        initializer = tf.zeros_initializer()
+        self.bias = self.add_weight("bias",
+                                    initializer=initializer,
+                                    shape=(self.channels_out,))
+
+    def call(self, input):
+        return tf.matmul(input, self.kernel * self.wscale) + self.bias
+
+
+
+def conv3d(filters, kernel, padding='valid', **kwargs):
+    return Conv3D(filters, kernel, padding=padding, **kwargs)
+
+
+def dense(channels_out, **kwargs):
+    # return layers.Dense(channels_out, **kwargs)
+    return Dense(channels_out, **kwargs)
 
 
 class GeneratorBlock(keras.Sequential):
     def __init__(self, filters, **kwargs):
         super(GeneratorBlock, self).__init__(**kwargs)
         self.add(layers.UpSampling3D())
-        self.add(layers.Convolution3D(filters, (3, 3, 3), padding='same'))
+        self.add(conv3d(filters, 3, padding='same'))
         self.add(layers.LeakyReLU())
+        self.add(ChannelNormalization())
 
-        self.add(layers.Convolution3D(filters, (3, 3, 3), padding='same'))
+        self.add(conv3d(filters, 3, padding='same'))
         self.add(layers.LeakyReLU())
-        
-        # self.add(layers.Convolution3D(filters, (3, 3, 3), padding='same'))
-        # self.add(layers.LeakyReLU())
-        
+        self.add(ChannelNormalization())
+
 
 def make_generator(phase, num_phases, base_dim, latent_dim):
         
@@ -35,26 +115,25 @@ def make_generator(phase, num_phases, base_dim, latent_dim):
     filters = num_filters(0, num_phases, base_dim)
     
     x = keras.Sequential((
-        layers.Dense(4 * 4 * 4 * filters),
+        dense(4 * 4 * 4 * filters, gain=np.sqrt(2) / 4),
         layers.LeakyReLU(),
         layers.Reshape((4, 4, 4, filters)),
-        layers.Convolution3D(filters, (3, 3, 3), padding='same'),
+        conv3d(filters, 3, padding='same'),
         layers.LeakyReLU(),
-        # layers.Convolution3D(filters, (3, 3, 3), padding='same'),
-        # layers.LeakyReLU()
+        ChannelNormalization(),
     ), name='generator_in')(z)
     
     x_upsampled = None  # Placeholder
     for i in range(1, phase):
         
         if i == phase - 1:
-            x_upsampled = layers.LeakyReLU()(layers.Conv3D(
-                1, 1, name=f'to_rgb_{phase - 1}')(layers.UpSampling3D()(x)))
+            x_upsampled = layers.LeakyReLU()(conv3d(
+                1, 1, gain=1, name=f'to_rgb_{phase - 1}')(layers.UpSampling3D()(x)))
         
         filters = num_filters(i, num_phases, base_dim)
         x = GeneratorBlock(filters=filters, name=f'generator_block_{i}')(x)
             
-    x = layers.Conv3D(1, 1, name=f'to_rgb_{phase}')(x)
+    x = conv3d(1, 1, gain=1, name=f'to_rgb_{phase}')(x)
     
     if x_upsampled is not None:
         x = AlphaMixingLayer()([x_upsampled, x, alpha_in])
@@ -62,17 +141,33 @@ def make_generator(phase, num_phases, base_dim, latent_dim):
     model = keras.Model(inputs=((z, alpha_in)), outputs=(x))
     return model
         
+
+class MinibatchStandardDeviation(tf.keras.layers.Layer):
+    def __init__(self, group_size=4):
+        super(MinibatchStandardDeviation, self).__init__()
+        self.group_size = group_size
+        
+    def call(self, inputs):
+        group_size = tf.minimum(self.group_size, tf.shape(inputs)[0])       # Minibatch must be divisible by (or smaller than) group_size.
+        s = inputs.shape                                                    # [NDHWC]  Input shape.
+        y = tf.reshape(inputs, [group_size, -1, s[1], s[2], s[3], s[4]])    # [GMDHWC] Split minibatch into M groups of size G.
+        y = tf.cast(y, tf.float32)                                          # [GMDHWC] Cast to FP32.
+        y -= tf.reduce_mean(y, axis=0, keepdims=True)                       # [GMDHWC] Subtract mean over group.
+        y = tf.reduce_mean(tf.square(y), axis=0)                            # [MDHWC]  Calc variance over group.)
+        y = tf.sqrt(y + 1e-8)                                               # [MDHWC]  Calc stddev over group.
+        y = tf.reduce_mean(y, axis=[1,2,3, 4], keepdims=True)               # [M1111]  Take average over fmaps and pixels.
+        y = tf.cast(y, inputs.dtype)                                        # [M1111]  Cast back to original data type.
+        y = tf.tile(y, [group_size, s[1], s[2], s[3], 1])                   # [N1DHW]  Replicate over group and pixels.
+        return tf.concat([inputs, y], axis=-1)                              # [NDHWC]  Append as new fmap.
+
         
 class DiscriminatorBlock(keras.Sequential):
     def __init__(self, filters, **kwargs):
         super(DiscriminatorBlock, self).__init__(**kwargs)
-        self.add(layers.Conv3D(filters, 3, padding='same'))
+        self.add(conv3d(filters, 3, padding='same'))
         self.add(layers.LeakyReLU())
         
-        # self.add(layers.Conv3D(filters, 3, padding='same'))
-        # self.add(layers.LeakyReLU())
-
-        self.add(layers.Conv3D(filters, 3, padding='same'))
+        self.add(conv3d(filters, 3, padding='same'))
         self.add(layers.LeakyReLU())
 
         self.add(layers.AveragePooling3D())
@@ -84,7 +179,7 @@ def make_discriminator(phase, num_phases, base_dim, img_shape, latent_dim):
     alpha = layers.Input((1,), name='discriminator_mixing_parameter')
         
     filters = num_filters(phase - 1, num_phases, base_dim)
-    x = layers.Conv3D(filters, 1, name=f'from_rgb_{phase}')(z)
+    x = conv3d(filters, 1, name=f'from_rgb_{phase}')(z)
     x = layers.LeakyReLU()(x)
     
 
@@ -95,18 +190,17 @@ def make_discriminator(phase, num_phases, base_dim, img_shape, latent_dim):
                                name=f'discriminator_block_{i + 1}')(x)
         
         if i == phase - 2:
-            x_downscaled = layers.LeakyReLU()(layers.Conv3D(filters, 1, name=f'from_rgb_{phase - 1}')(layers.AveragePooling3D()(z)))
+            x_downscaled = layers.LeakyReLU()(conv3d(filters, 1, name=f'from_rgb_{phase - 1}')(layers.AveragePooling3D()(z)))
             x = AlphaMixingLayer()([x_downscaled, x, alpha])
     
     x = keras.Sequential((
-        # layers.Conv3D(filters, (3, 3, 3), padding='same'), 
-        # layers.LeakyReLU(),
-        layers.Conv3D(filters, (3, 3, 3), padding='same'), 
+        MinibatchStandardDeviation(),
+        conv3d(filters, 3, padding='same'), 
         layers.LeakyReLU(),
         layers.Flatten(),
-        layers.Dense(latent_dim),
+        dense(latent_dim),
         layers.LeakyReLU(),
-        layers.Dense(1),
+        dense(1, gain=1),
     ), name='discriminator_out')(x)
 
     
@@ -143,7 +237,7 @@ def get_training_functions(horovod):
                             gradient_penalty_weight,
                             is_first_batch,
                             horovod=horovod):
-
+        
         for layer in discriminator.layers:
             layer.trainable = True
         discriminator.trainable = True
@@ -157,7 +251,6 @@ def get_training_functions(horovod):
             d_real = discriminator([x_real, alpha])
             x_fake = generator([z, alpha])
             d_fake = discriminator([x_fake, alpha])
-
 
             averaged_samples = RandomWeightedAverage()([x_real, x_fake])
 
@@ -176,10 +269,11 @@ def get_training_functions(horovod):
 
         grads = tape.gradient(d_loss, discriminator.trainable_variables)
         discriminator_optim.apply_gradients(zip(grads, discriminator.trainable_variables))
-
+        
+        # WHY DOES THIS GET PRINTED TWICE?
         if horovod and is_first_batch:
             if hvd.rank() == 0:
-                print("Broacasting discriminator variables.")
+                print("Broadcasting discriminator variables.")
             hvd.broadcast_variables(discriminator.variables, root_rank=0)
             hvd.broadcast_variables(discriminator_optim.variables(), root_rank=0)
         
