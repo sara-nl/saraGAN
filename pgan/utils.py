@@ -10,17 +10,21 @@ import numpy as np
 import nvgpu
 import psutil
 import horovod.tensorflow as hvd
+import math
+from metrics import sliced_wasserstein_distance_3d
+
 
 def print_gpu_info():
     gpu_info = nvgpu.gpu_info()
     
     for d in gpu_info:
-        print(f"\n{d['type']} \t Memory Used: {d['mem_used']} \t Total Memory {d['mem_total']}\n")
+    #     print(f"\n{d['type']} \t Memory Used: {d['mem_used']} \t Total Memory {d['mem_total']}\n")
+        yield d['type'], d['mem_used']
         
         
 def print_cpu_info():
     process = psutil.Process(os.getpid())
-    print(f"\nProcess ID {os.getpid()} \t Memory Usage: {process.memory_info().rss / (1024 ** 2)} \n")
+    return os.getpid(), process.memory_info().rss / (1024 ** 2)
     
     
 AUTOTUNE = tf.data.experimental.AUTOTUNE
@@ -40,8 +44,8 @@ def save_array_as_gif(file: str, slice_array):
     
     anim = ArtistAnimation(fig, plots)
     
-    writer = PillowWriter(fps=fps)
-    anim.save(file, writer=writer)
+    # writer = PillowWriter(fps=fps)
+    anim.save(file, writer='imagemagick')
     plt.close()
     
 
@@ -53,8 +57,8 @@ def generate_gif(fakes, originals, output_dir, epoch):
     fake_grid = transform_batch_to_image_grid(fakes)
     original_grid = transform_batch_to_image_grid(originals)
     
-#     fake_grid = normalize_to_range(fake_grid, rng=(-1, 1))
-#     original_grid = normalize_to_range(original_grid, rng=(-1, 1))
+    fake_grid = np.clip(fake_grid, -1, 1)
+    original_grid = np.clip(original_grid, -1, 1)
     
     padding = np.ones((original_grid.shape[0], 4, *original_grid.shape[2:]))
     image = np.concatenate([fake_grid, padding, original_grid], axis=1)
@@ -120,3 +124,33 @@ def load_lidc_idri_dataset_from_tfrecords(path, batch_size, shape, horovod=False
     dataset = dataset.prefetch(batch_size)
     return dataset
     
+    
+def nearest_square_root(n):
+    return int(math.pow(math.floor(math.sqrt(n)), 2))    
+    
+    
+def get_wasserstein_batch(dataset, min_size=64):
+    
+    return_batch = None  # Placeholder
+    
+    for batch in dataset.take(min_size):
+        if return_batch is None:
+            return_batch = batch
+        
+        else:
+            return_batch = np.concatenate([return_batch, batch], axis=0)
+        
+        if len(return_batch) >= min_size:
+            return return_batch
+        
+      
+def write_wasserstein_distances(real_batch, fake_batch, step):
+    assert real_batch.shape == fake_batch.shape
+    min_res = 8
+    swd = sliced_wasserstein_distance_3d(real_batch, fake_batch, resolution_min=min_res)
+    
+    for i in reversed(range(len((swd)))):
+        lod = min_res * 2 ** i
+        tf.summary.scalar(f"swd_real_real_{lod}", swd[i][0], step=step)
+        tf.summary.scalar(f"swd_fake_real_{lod}", swd[i][1], step=step)
+        

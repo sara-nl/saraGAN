@@ -1,0 +1,1 @@
+from metrics.swd import sliced_wasserstein_distance_3d
