@@ -27,8 +27,12 @@ def train(generator, discriminator, g_optim, d_optim, data_loader,
         d_lr = d_optim.param_groups[0]['lr']
         scalars = list(scalars) + [epoch, alpha, g_lr, d_lr]
         global_step = (phase - 1) * (mixing_epochs + stabilizing_epochs) + epoch
+        images_seen = global_step * len(data_loader) * data_loader.batch_size
+        if horovod:
+            images_seen = images_seen * hvd.size()
+        
         if writer:
-            write_summary(writer, global_step, x_real, x_fake, scalars)
+            write_summary(writer, images_seen, x_real, x_fake, scalars)
         
         # Update alpha
         alpha -= 1 / mixing_epochs
@@ -50,8 +54,12 @@ def train(generator, discriminator, g_optim, d_optim, data_loader,
         d_lr = d_optim.param_groups[0]['lr']
         scalars = list(scalars) + [epoch, alpha, g_lr, d_lr]
         global_step = (phase - 1) * (mixing_epochs + stabilizing_epochs) + epoch
+        images_seen = global_step * len(data_loader) * data_loader.batch_size
+        if horovod:
+            images_seen = images_seen * hvd.size()
+        
         if writer:
-            write_summary(writer, global_step, x_real, x_fake, scalars)
+            write_summary(writer, images_seen, x_real, x_fake, scalars)
 
 
 def train_epoch(data_loader, generator, discriminator, generator_optim, discriminator_optim, alpha):
@@ -90,7 +98,7 @@ def train_epoch(data_loader, generator, discriminator, generator_optim, discrimi
         
         d_losses.append(d_loss.item())
         
-        del x_real, z, x_fake, d_fake, gp_loss, real_loss, fake_loss, d_loss
+        del z, x_fake, d_fake, gp_loss, real_loss, fake_loss, d_loss
         
         # Train generator.
         generator.train()
@@ -113,7 +121,7 @@ def train_epoch(data_loader, generator, discriminator, generator_optim, discrimi
         g_losses.append(g_loss.item())
         distances.append(d_real.mean().item() - d_fake.mean().item())
         
-        del z, x_fake, d_fake, g_loss
+        del z, d_fake, g_loss
 
     return x_fake[0].detach().cpu(), x_real[0].cpu(), np.mean(d_losses), np.mean(g_losses), np.mean(distances)
         

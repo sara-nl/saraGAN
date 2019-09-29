@@ -6,3 +6,5 @@ logs/
 checkpoints/
 *.out
 .ipynb_checkpoints/
+runs/
+runs/*
