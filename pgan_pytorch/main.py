@@ -86,7 +86,7 @@ def main(args):
                 assert len(inc_keys_generator[0]) == 6
 
         # Get Optimizers
-        lr_d = 2e-3
+        lr_d = 1e-3
         lr_g = 1e-3
         if args.horovod:
             lr_d = lr_d * np.sqrt(hvd.size())
