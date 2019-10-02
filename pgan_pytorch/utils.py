@@ -23,5 +23,6 @@ def write_summary(writer, step, x_real, x_fake, scalars):
     writer.add_scalar('alpha', scalars[4], step)
     writer.add_scalar('g_lr', scalars[5], step)
     writer.add_scalar('d_lr', scalars[6], step)
+    writer.add_scalar('img\/s', scalars[7], step)
     # writer.add_scalars('lr', {'g_lr': scalars[5], 'd_lr': scalars[6]}, step)
     

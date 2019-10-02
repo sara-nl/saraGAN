@@ -120,7 +120,6 @@ def resample_sitk_image(sitk_image, spacing=None, interpolator=None,
 
     return resampled_sitk_image, orig_spacing
 
-
 def L(x, a):
     return np.sinc(x) * np.sinc(x / a)
 
@@ -229,51 +228,52 @@ def get_dicom_iterator(root, reduce_fn):
         else:
             yield array, metadata
 
-reduce_fn = lanczos_3d
+# reduce_fn = lanczos_3d
+reduce_fn = absmax
 dataset_dir = f'/project/davidr/lidc_idri/'
-hdf5_dir = os.path.join(dataset_dir, 'hdf5', reduce_fn.__name__)
-
-if not os.path.exists(hdf5_dir):
-    os.makedirs(hdf5_dir)
+# hdf5_dir = os.path.join(dataset_dir, 'hdf5', reduce_fn.__name__)
+# 
+# if not os.path.exists(hdf5_dir):
+#     os.makedirs(hdf5_dir)
     
-hdf5_files = None
+# hdf5_files = None
 
 total = len(os.listdir(dataset_dir))
 num_iters = total
 
 for i, (arrays, metadata) in enumerate(get_dicom_iterator(dataset_dir, reduce_fn)):
     
-    if hdf5_files is None:
+    intercept = metadata['intercept']
+    
+    # if hdf5_files is None:
         
-        hdf5_files = {}
-        intercept = np.array(metadata['intercept'])
-        
-        for array in arrays:
-            size = array.shape[-1]
-            dataset_shape = [num_iters] + list(array.shape)
-            hdf5_file = h5py.File(os.path.join(hdf5_dir, f'{size}x{size}.h5'), mode='w')
-            hdf5_file.create_dataset('data', dataset_shape, np.uint16)
-            hdf5_file.create_dataset('intercept', [num_iters] + list(intercept.shape), np.int)
-            hdf5_files[f'{size}x{size}'] = hdf5_file
+        # hdf5_files = {}
+        # intercept = np.array(metadata['intercept'])
+        # 
+        # for array in arrays:
+        #     size = array.shape[-1]
+        #     dataset_shape = [num_iters] + list(array.shape)
+        #     hdf5_file = h5py.File(os.path.join(hdf5_dir, f'{size}x{size}.h5'), mode='w')
+        #     hdf5_file.create_dataset('data', dataset_shape, np.uint16)
+        #     hdf5_file.create_dataset('intercept', [num_iters] + list(intercept.shape), np.int)
+        #     hdf5_files[f'{size}x{size}'] = hdf5_file
     
     for array in arrays:
         size = array.shape[-1]
-        hdf5_files[f'{size}x{size}']['data'][i, ...] = array[None]
-        hdf5_files[f'{size}x{size}']['intercept'][i, ...] = intercept
+        # hdf5_files[f'{size}x{size}']['data'][i, ...] = array[None]
+        # hdf5_files[f'{size}x{size}']['intercept'][i, ...] = intercept
         
         pt_dir = os.path.join(dataset_dir, 'pt', reduce_fn.__name__, f'{size}x{size}')
-        npy_dir = os.path.join(dataset_dir, 'npy', reduce_fn.__name__, f'{size}x{size}')
+        # npy_dir = os.path.join(dataset_dir, 'npy', reduce_fn.__name__, f'{size}x{size}')
         
         if not os.path.exists(pt_dir):
             os.makedirs(pt_dir)
 
-        if not os.path.exists(npy_dir):
-            os.makedirs(npy_dir)
+        # if not os.path.exists(npy_dir):
+        #     os.makedirs(npy_dir)
 
         torch.save(torch.from_numpy((array - intercept).astype(np.int16)), os.path.join(pt_dir, f'{i:04}.pt'))
-        np.save(os.path.join(npy_dir, f'{i:04}.npy'), array)
+        # np.save(os.path.join(npy_dir, f'{i:04}.npy'), array)
         
-    print(i, num_iters)
-
 for size in hdf5_files:
     hdf5_files[size].close()

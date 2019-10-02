@@ -199,7 +199,7 @@ class GeneratorBlock(nn.Sequential):
         self.upsampling = nn.Upsample(scale_factor=2)
         self.conv1 = EqualizedConv3d(filters_in, filters_out, 3, padding=1)
         self.conv2 = EqualizedConv3d(filters_out, filters_out, 3, padding=1)
-        self.lrelu = nn.LeakyReLU(negative_slope=0.2)
+        self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
         self.cn = ChannelNormalization()
     
     def forward(self, input):

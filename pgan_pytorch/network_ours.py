@@ -238,10 +238,10 @@ class Generator(nn.Module):
         filters = base_dim
         self.generator_in = nn.Sequential(
             EqualizedLinear(latent_dim, np.product(self.base_shape) * filters),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.LeakyReLU(negative_slope=0.2),
             Reshape([-1, filters] + list(self.base_shape)),
             EqualizedConv3d(filters, filters, 3, padding=1),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            nn.LeakyReLU(negative_slope=0.2),
             ChannelNormalization(),
         )
         
