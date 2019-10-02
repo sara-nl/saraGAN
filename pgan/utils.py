@@ -62,7 +62,7 @@ def generate_gif(fakes, originals, output_dir, epoch):
     
     padding = np.ones((original_grid.shape[0], 4, *original_grid.shape[2:]))
     image = np.concatenate([fake_grid, padding, original_grid], axis=1)
-    size = originals.shape[1]
+    size = originals.shape[-1]
     output_path = os.path.join(output_dir, f'{size}x{size}x{size}_{epoch:04}.gif')
     save_array_as_gif(output_path, image)
     
@@ -107,6 +107,8 @@ def load_lidc_idri_dataset_from_tfrecords(path, batch_size, shape, horovod=False
         seed_adjustment = hvd.rank()
         tf.set_random_seed(42 + seed_adjustment)
         np.random.seed(42 + seed_adjustment)
+         
+    print(f"Dataset output shape: {shape}")
 
     filenames = os.listdir(path)
     abs_filenames = [os.path.join(path, filename) for filename in filenames]
