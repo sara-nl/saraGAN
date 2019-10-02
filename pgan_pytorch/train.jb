@@ -19,6 +19,6 @@ HOSTS=${HOSTS::-1}
 
 echo ${HOSTS}  
 
-horovodrun -np $SLURM_NTASKS -H ${HOSTS} --start-timeout 120 --verbose python main.py /project/davidr/lidc_idri/npys/lanczos/ 512 128 --base_dim 256 --latent_dim 256 --mixing_epochs 128 --stabilizing_epochs 128 --starting_phase 1 --horovod
+horovodrun -np $SLURM_NTASKS -H ${HOSTS} --start-timeout 120 --verbose python main.py /project/davidr/lidc_idri/pt/lanczos_3d/ 512 128 --base_dim 512 --latent_dim 512 --mixing_epochs 512 --stabilizing_epochs 512 --starting_phase 1 --horovod
 
 # mpirun -N $SLURM_NNODES -npernode 4 python main.py /project/davidr/lidc_idri/npys/lanczos/ 512 128 --base_dim 256 --latent_dim 256 --mixing_epochs 256 --stabilizing_epochs 256 --starting_phase 1 --horovod

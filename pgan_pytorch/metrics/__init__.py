@@ -1,0 +1,2 @@
+from .kms import kolmogorov_smirnov_distance
+from .swd import sliced_wasserstein_distance

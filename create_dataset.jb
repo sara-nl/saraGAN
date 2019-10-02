@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -p gpu_titanrtx
+#SBATCH -p gpu
 #SBATCH -t 120:00:00
 #SBATCH -N 1 
 #SBATCH -n 1

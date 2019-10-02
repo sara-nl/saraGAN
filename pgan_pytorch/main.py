@@ -7,7 +7,7 @@ import os
 from torch.utils.tensorboard import SummaryWriter
 
 from data import DatasetFolder
-from network import Generator, Discriminator
+from network_ours import Generator, Discriminator
 from utils import count_parameters
 from train import train
 
@@ -27,15 +27,15 @@ def main(args):
         size = 2 * 2 ** phase
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
         dataset = DatasetFolder(data_path, 
-                               loader=lambda path: np.load(path),
-                               extensions=('npy',),
-                               transform=lambda x: torch.from_numpy(x))
+                               loader=lambda path: torch.load(path),
+                               extensions=('pt',),
+                               transform=lambda x: x.unsqueeze(0).float() / 1024)
         
         # Get DataLoader
         if args.base_batch_size:
             batch_size = max(1, args.base_batch_size // (2 ** phase))
         else:
-            batch_size = max(1, 256 // size)
+            batch_size = max(1, 128 // size)
             
         if args.horovod:
             verbose = hvd.rank() == 0
@@ -58,7 +58,6 @@ def main(args):
         
         # Get Networks
         zdim_base = max(1, args.final_zdim // (2 ** ((num_phases - 1))))
-        
         generator = Generator(phase, num_phases, 
                               args.base_dim, args.latent_dim, (1, zdim_base, 4, 4))
         discriminator = Discriminator(phase, num_phases, 
@@ -86,7 +85,7 @@ def main(args):
                 assert len(inc_keys_generator[0]) == 6
 
         # Get Optimizers
-        lr_d = 1e-3
+        lr_d = 2e-3
         lr_g = 1e-3
         if args.horovod:
             lr_d = lr_d * np.sqrt(hvd.size())
