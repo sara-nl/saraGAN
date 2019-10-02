@@ -107,7 +107,7 @@ class GeneratorBlock(keras.Sequential):
         self.add(ChannelNormalization())
 
 
-def make_generator(phase, num_phases, base_dim, latent_dim):
+def make_generator(phase, num_phases, base_dim, latent_dim, zdim_phase1):
         
     z = layers.Input((latent_dim,), name='generator_input')
     alpha_in = layers.Input((1,), name='generator_mixing_parameter')
@@ -115,9 +115,9 @@ def make_generator(phase, num_phases, base_dim, latent_dim):
     filters = num_filters(0, num_phases, base_dim)
     
     x = keras.Sequential((
-        dense(4 * 4 * 4 * filters, gain=np.sqrt(2) / 4),
+        dense(zdim_phase1 * 4 * 4 * filters, gain=np.sqrt(2) / 4),
         layers.LeakyReLU(),
-        layers.Reshape((4, 4, 4, filters)),
+        layers.Reshape((zdim_phase1, 4, 4, filters)),
         conv3d(filters, 3, padding='same'),
         layers.LeakyReLU(),
         ChannelNormalization(),
@@ -162,12 +162,12 @@ class MinibatchStandardDeviation(tf.keras.layers.Layer):
 
         
 class DiscriminatorBlock(keras.Sequential):
-    def __init__(self, filters, **kwargs):
+    def __init__(self, filters_in, filters_out, **kwargs):
         super(DiscriminatorBlock, self).__init__(**kwargs)
-        self.add(conv3d(filters, 3, padding='same'))
+        self.add(conv3d(filters_in, 3, padding='same'))
         self.add(layers.LeakyReLU())
         
-        self.add(conv3d(filters, 3, padding='same'))
+        self.add(conv3d(filters_out, 3, padding='same'))
         self.add(layers.LeakyReLU())
 
         self.add(layers.AveragePooling3D())

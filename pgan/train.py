@@ -14,7 +14,7 @@ GPUS = tf.config.experimental.list_physical_devices('GPU')
 for gpu in GPUS:
     tf.config.experimental.set_memory_growth(gpu, True)
 
-from network import make_generator, make_discriminator, get_training_functions
+from network_dev import make_generator, make_discriminator, get_training_functions
 from utils import load_lidc_idri_dataset_from_tfrecords, generate_gif, print_gpu_info, print_cpu_info, transform_batch_to_image_grid, save_array_as_gif, nearest_square_root, get_wasserstein_batch, write_wasserstein_distances
 from loss import wasserstein_loss, gradient_penalty_loss
 
@@ -56,6 +56,16 @@ def train(generator,
         
         if horovod:
             iterator = dataset.take(max(1, epoch_size // hvd.size())) 
+            
+            # buildup_epochs = 8
+            # if epoch == 0:
+            #     target_lr = learning_rate.read_value()
+            #     learning_rate.assign(0)
+            #     buildup_rate = target_lr / buildup_epochs 
+            # 
+            # elif epoch <= buildup_epochs:
+            #     learning_rate.assign_add(buildup_rate)
+            
         else:
             iterator = dataset.take(epoch_size) 
             
@@ -74,8 +84,9 @@ def train(generator,
                                          gradient_penalty_weight,
                                          is_first_batch)
             
+            raise
             discriminator_loss.append(d_loss)
-
+            
             if i % training_ratio == 0:
                 g_loss, x_fake = train_generator(
                     generator,
@@ -87,7 +98,11 @@ def train(generator,
                     is_first_batch
                 )
                 generator_loss.append(g_loss)
-            
+                
+                print(x_fake.shape)
+                print(image_batch.shape)
+                raise
+                
             end = datetime.now()
             
                
@@ -159,18 +174,23 @@ def main(args):
     num_phases = int(np.log2(args.final_resolution) - 1)
     if (args.horovod and hvd.rank() == 0) or not args.horovod:
         print(f"Number of phases is {num_phases}, final output resolution will be {2 * 2 ** num_phases}")
-    
+        
     for phase in range(args.starting_phase, num_phases + 1):
         
         size = 2 * 2 ** phase
        
         tfr_path = args.tfrecords_path + f'tfrecords_{size}x{size}x{size}/'
+        # tfr_path = os.path.join(args.tfrecords_path, f'tfrecords_new_lanczos_{size}x{size}')
         
         if not os.path.exists(tfr_path):
             raise ValueError(f"Path doesn't exist: {tfr_path}")
         
         dataset_size = len(os.listdir(tfr_path))
-        shape = (size, size, size, 1)
+        zdim_phase1 = args.final_zdim // (2 ** ((num_phases - 1)))
+        zdim_phase = args.final_zdim // (2 ** ((num_phases - phase)))
+        shape = (zdim_phase, size, size, 1)
+        
+        print(shape)
         
         if args.phase_1_batch_size:
             batch_size = args.phase_1_batch_size // (2 ** phase)
@@ -181,26 +201,25 @@ def main(args):
         dataset = load_lidc_idri_dataset_from_tfrecords(tfr_path, batch_size=batch_size, shape=shape)
         epoch_size = dataset_size // batch_size
         
-        generator = make_generator(phase, num_phases, args.base_dim, args.latent_dim)
+        generator = make_generator(phase, num_phases, args.base_dim, args.latent_dim, zdim_phase1)
         discriminator = make_discriminator(phase, num_phases, args.base_dim, shape, args.latent_dim)
         
         if (args.horovod and hvd.rank() == 0) or not args.horovod:
             print(f'\n|\t\t\tPhase: {phase} \t Resolution: {size} \t Batch Size: {batch_size} \t Epoch Size: {epoch_size}\t\t\t|\n')
         
         if (args.horovod and hvd.rank() == 0) or not args.horovod:
-            print(generator.summary())
-            print(discriminator.summary())
+            print(generator.summary(line_length=120))
+            print(discriminator.summary(line_length=120))
         
         if args.horovod:
-            # learning_rate = 1e-3 * np.log2(hvd.size() + 1)
-            learning_rate = tf.Variable(tf.constant(args.learning_rate * hvd.size()))
+            learning_rate = tf.Variable(tf.constant(args.learning_rate * np.sqrt(hvd.size())))
             if args.decay_rate == 0:
                 decay_rate = (learning_rate.read_value() - args.learning_rate) / (args.mixing_epochs + args.stabilizing_epochs)
             if hvd.rank() == 0:
                 print(f"Learning rate: {learning_rate.read_value():.5f} \t Decay rate: {decay_rate:.5f}")
             
-            generator_optim = tf.optimizers.Adam(learning_rate * hvd.size(), beta_1=0.0, beta_2=0.9)
-            discriminator_optim = tf.optimizers.Adam(learning_rate * hvd.size(), beta_1=0.0, beta_2=0.9)
+            generator_optim = tf.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.9)
+            discriminator_optim = tf.optimizers.Adam(learning_rate, beta_1=0.0, beta_2=0.9)
             
         else:
             learning_rate = tf.Variable(tf.constant(args.learning_rate))
@@ -217,9 +236,9 @@ def main(args):
             
             if os.path.exists(checkpoint_path_prev):
                 print(f"Loading weights from phase {phase - 1} from {checkpoint_path_prev}")
-                generator.load_weights(os.path.join(checkpoint_path_prev, 'generator.h5'), by_name=True)
-                discriminator.load_weights(os.path.join(checkpoint_path_prev, 'discriminator.h5'), by_name=True)
-            
+                # generator.load_weights(os.path.join(checkpoint_path_prev, 'generator.h5'), by_name=True)
+                # discriminator.load_weights(os.path.join(checkpoint_path_prev, 'discriminator.h5'), by_name=True)
+                
             image_dir = os.path.join('logs', timestamp, f'phase_{phase}_start.gif')
             z = tf.random.normal(shape=(batch_size, args.latent_dim))
             alpha = tf.fill((batch_size, 1, 1, 1, 1), 1.0)
@@ -229,14 +248,13 @@ def main(args):
             img = transform_batch_to_image_grid(fakes[random_indices])
             save_array_as_gif(image_dir, img)           
             
-            
-            if phase >= 2:
-                with summary_writer.as_default():
-                    real_batch = get_wasserstein_batch(dataset)
-                    z = tf.random.normal(shape=(real_batch.shape[0], args.latent_dim))
-                    alpha = tf.fill((real_batch.shape[0], 1, 1, 1, 1), 1.0)
-                    fake_batch = generator([z, alpha])
-                    write_wasserstein_distances(real_batch, fake_batch, step)
+            # if phase >= 2:
+            #     with summary_writer.as_default():
+            #         real_batch = get_wasserstein_batch(dataset)
+            #         z = tf.random.normal(shape=(real_batch.shape[0], args.latent_dim))
+            #         alpha = tf.fill((real_batch.shape[0], 1, 1, 1, 1), 1.0)
+            #         fake_batch = generator([z, alpha])
+            #         write_wasserstein_distances(real_batch, fake_batch, step)
                     
             print("\n\t\t\tStarting mixing epochs\t\t\t\n")
         
@@ -272,12 +290,12 @@ def main(args):
             
 #             profiler_result = profiler.stop()
 #             profiler.save(log_dir, profiler_result)
-            if phase >= 2:
-                with summary_writer.as_default():
-                    z = tf.random.normal(shape=(real_batch.shape[0], args.latent_dim))
-                    alpha = tf.fill((real_batch.shape[0], 1, 1, 1, 1), 0.0)
-                    fake_batch = generator([z, alpha])
-                    write_wasserstein_distances(real_batch, fake_batch, step=step)
+            # if phase >= 2:
+            #     with summary_writer.as_default():
+            #         z = tf.random.normal(shape=(real_batch.shape[0], args.latent_dim))
+            #         alpha = tf.fill((real_batch.shape[0], 1, 1, 1, 1), 0.0)
+            #         fake_batch = generator([z, alpha])
+            #         write_wasserstein_distances(real_batch, fake_batch, step=step)
        
             print("\n\t\t\tStarting stabilizing epochs\t\t\t\n")
 #             profiler.start()
@@ -316,18 +334,18 @@ def main(args):
             image_dir = os.path.join('logs', timestamp, f'phase_{phase}_end.gif')
             z = tf.random.normal(shape=(batch_size, args.latent_dim))
             alpha = tf.fill((batch_size, 1, 1, 1, 1), 0.0)
-            fakes = generator([z, alpha]).numpy().squeeze()
+            fakes = generator([z, alpha]).numpy().squeeze(-1)
             num_images = nearest_square_root(fakes.shape[0])
             random_indices = np.random.choice(fakes.shape[0], num_images, replace=False)              
             img = transform_batch_to_image_grid(fakes[random_indices])
             save_array_as_gif(image_dir, img)       
             
-            if phase >= 2:
-                with summary_writer.as_default():
-                    z = tf.random.normal(shape=(real_batch.shape[0], args.latent_dim))
-                    alpha = tf.fill((real_batch.shape[0], 1, 1, 1, 1), 0.0)
-                    fake_batch = generator([z, alpha])
-                    write_wasserstein_distances(real_batch, fake_batch, step=step)
+            # if phase >= 2:
+            #     with summary_writer.as_default():
+            #         z = tf.random.normal(shape=(real_batch.shape[0], args.latent_dim))
+            #         alpha = tf.fill((real_batch.shape[0], 1, 1, 1, 1), 0.0)
+            #         fake_batch = generator([z, alpha])
+            #         write_wasserstein_distances(real_batch, fake_batch, step=step)
        
             checkpoint_path = os.path.join('checkpoints', f'phase_{phase}')
             if not os.path.exists(checkpoint_path):
@@ -345,6 +363,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('tfrecords_path', type=str)
     parser.add_argument('final_resolution', type=int)
+    parser.add_argument('final_zdim', type=int)
     parser.add_argument('--starting_phase', type=int, default=1)
     parser.add_argument('--base_dim', type=int, default=128)
     parser.add_argument('--latent_dim', type=int, default=128)
