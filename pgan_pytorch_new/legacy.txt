@@ -1,0 +1,14 @@
+# Load weights from previous phase.
+if (args.horovod and hvd.rank() == 0) or not args.horovod:
+    # Load weights from previous phase.
+    discriminator_dir = os.path.join(writer.log_dir, f'discriminator_phase_{phase - 1}.pt')
+    generator_dir = os.path.join(writer.log_dir, f'generator_phase_{phase - 1}.pt')
+    if os.path.exists(discriminator_dir) and os.path.exists(generator_dir):
+        discriminator.eval()
+        generator.eval()
+        print(f"Loading weights from phase {phase - 1}")
+        inc_keys_discriminator = discriminator.load_state_dict(torch.load(discriminator_dir), strict=False)
+        # This is dependent on architecture, but I keep it in for safety reasons for now.
+        assert len(inc_keys_discriminator[0]) == 6  
+        inc_keys_generator = generator.load_state_dict(torch.load(generator_dir), strict=False)
+        assert len(inc_keys_generator[0]) == 6

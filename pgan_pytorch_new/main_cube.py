@@ -5,31 +5,80 @@ import random
 import argparse
 import os
 from torch.utils.tensorboard import SummaryWriter
+from copy import deepcopy
 
 from data import DatasetFolder
-from network_ours import Generator, Discriminator
+from network_o import Generator, Discriminator
 from utils import count_parameters
 from train import train
+from distutils.dir_util import copy_tree
+import time
+import glob
 
 
 def main(args):
     num_phases = int(np.log2(args.final_resolution) - 1)
     if (args.horovod and hvd.rank() == 0) or not args.horovod:
-        print(f"Number of phases is {num_phases},"
+        print(f"Number of phases is {num_phases}, "
               f"final output resolution will be {2 * 2 ** num_phases}")
         
+        verbose = True
         writer = SummaryWriter()
+        
     else:
         writer = None
+        verbose = False
+        
+    # Get Networks
+    zdim_base = max(1, args.final_zdim // (2 ** ((num_phases - 1))))
+    print(zdim_base)
+    generator = Generator(args.starting_phase, num_phases, 
+                          args.base_dim, args.latent_dim, (1, zdim_base, 4, 4))
+    discriminator = Discriminator(args.starting_phase, num_phases, 
+                          args.base_dim, args.latent_dim, (1, zdim_base, 4, 4))
         
     for phase in range(args.starting_phase, num_phases + 1):
+        
+        if phase  > args.starting_phase:
+            
+            # Prevents horovod error.
+            generator = deepcopy(generator)
+            discriminator = deepcopy(discriminator)
+            
+            generator.grow()
+            discriminator.grow()
+            
+        if verbose:
+            print(generator)
+            print(f"Number of Generator parameters: {count_parameters(generator)}")
+            print(discriminator)
+            print(f"Number of Discriminator parameters: {count_parameters(discriminator)}")
+        
         # Get Dataset.
         size = 2 * 2 ** phase
-        data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
-        dataset = DatasetFolder(data_path, 
+        data_path = os.path.join(args.dataset_path, f'{size}x{size}x{size}/')
+        scratch_path = os.path.join('/scratch/', f'{size}x{size}x{size}')
+        if (args.horovod and hvd.local_rank() == 0) or not args.horovod:
+            print("Copying files to scratch space.")
+            copy_tree(data_path, scratch_path, preserve_symlinks=True, update=True)
+            print('Done!')
+            
+        while len(glob.glob(os.path.join(scratch_path, '*.pt'))) < len(glob.glob(os.path.join(data_path, '*.pt'))):
+            print(hvd.local_rank(), len(glob.glob(os.path.join(scratch_path, '*.pt'))), len(glob.glob(os.path.join(data_path, '*.pt'))))
+            time.sleep(1)
+        
+        assert len(glob.glob(os.path.join(scratch_path, '*.pt'))) == len(glob.glob(os.path.join(data_path, '*.pt')))
+
+        dataset = DatasetFolder(scratch_path, 
                                loader=lambda path: torch.load(path),
                                extensions=('pt',),
-                               transform=lambda x: x.unsqueeze(0).float() / 1024)
+                               # transform=lambda x: x.unsqueeze(0).float() / 1024
+                               transform=lambda x: x.float() 
+        )
+
+        assert len(dataset) == len(glob.glob(os.path.join(scratch_path, '*.pt')))
+        
+        print('Dataset len, min, max, shape:', len(dataset), dataset[0].min(), dataset[0].max(), dataset[0].shape)
         
         # Get DataLoader
         if args.base_batch_size:
@@ -39,15 +88,14 @@ def main(args):
             
         if args.horovod:
             verbose = hvd.rank() == 0
-            torch.set_num_threads(4)
+            torch.set_num_threads(8)
             train_sampler = torch.utils.data.distributed.DistributedSampler(
                 dataset, num_replicas=hvd.size(), rank=hvd.rank())
             data_loader = torch.utils.data.DataLoader(
                 dataset, batch_size=batch_size,
-            sampler=train_sampler, num_workers=4, pin_memory=True)
+            sampler=train_sampler, num_workers=8, pin_memory=True)
 
         else:
-            verbose = True
             data_loader = torch.utils.data.DataLoader(
                 dataset,
                 batch_size=batch_size,
@@ -56,36 +104,8 @@ def main(args):
                 pin_memory=True)
             train_sampler = None
         
-        # Get Networks
-        zdim_base = max(1, args.final_zdim // (2 ** ((num_phases - 1))))
-        generator = Generator(phase, num_phases, 
-                              args.base_dim, args.latent_dim, (1, zdim_base, 4, 4))
-        discriminator = Discriminator(phase, num_phases, 
-                              args.base_dim, args.latent_dim, (1, zdim_base, 4, 4))
-        
-        if verbose:
-            print(generator)
-            print(f"Number of Generator parameters: {count_parameters(generator)}")
-            print(discriminator)
-            print(f"Number of Discriminator parameters: {count_parameters(discriminator)}")
-        
-        # Load weights from previous phase.
-        if (args.horovod and hvd.rank() == 0) or not args.horovod:
-            # Load weights from previous phase.
-            discriminator_dir = os.path.join(writer.log_dir, f'discriminator_phase_{phase - 1}.pt')
-            generator_dir = os.path.join(writer.log_dir, f'generator_phase_{phase - 1}.pt')
-            if os.path.exists(discriminator_dir) and os.path.exists(generator_dir):
-                discriminator.eval()
-                generator.eval()
-                print(f"Loading weights from phase {phase - 1}")
-                inc_keys_discriminator = discriminator.load_state_dict(torch.load(discriminator_dir), strict=False)
-                # This is dependent on architecture, but I keep it in for safety reasons for now.
-                assert len(inc_keys_discriminator[0]) == 6  
-                inc_keys_generator = generator.load_state_dict(torch.load(generator_dir), strict=False)
-                assert len(inc_keys_generator[0]) == 6
-
         # Get Optimizers
-        lr_d = 2e-3
+        lr_d = 1e-3
         lr_g = 1e-3
         if args.horovod:
             lr_d = lr_d * np.sqrt(hvd.size())
@@ -104,9 +124,9 @@ def main(args):
             
             d_optim = hvd.DistributedOptimizer(
                 d_optim, named_parameters=discriminator.named_parameters(),
-                compression=compression)
+                compression=compression,
+                backward_passes_per_step=4)
             
-        
         if (args.horovod and verbose) or not args.horovod:
             print(f'\n|\t\tPhase: {phase} \t Resolution: {size}' 
                   f'\tBatch Size: {batch_size} \t Epoch Size: {len(data_loader)}\t\t|\n')
@@ -137,7 +157,7 @@ if __name__ == '__main__':
     parser.add_argument('dataset_path', type=str)
     parser.add_argument('final_resolution', type=int)
     parser.add_argument('final_zdim', type=int)
-    parser.add_argument('--starting_phase', type=int, default=1)
+    parser.add_argument('--starting_phase', type=int, default=2)
     parser.add_argument('--base_dim', type=int, default=256)
     parser.add_argument('--latent_dim', type=int, default=256)
     parser.add_argument('--base_batch_size', type=int, default=None)

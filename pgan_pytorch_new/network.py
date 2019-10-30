@@ -81,6 +81,9 @@ class DiscriminatorBlock(nn.Sequential):
     def __init__(self, filters_in, filters_out):
         super(DiscriminatorBlock, self).__init__()
         
+        self.filters_in = filters_in
+        self.filters_out = filters_out
+        
         self.conv1 = EqualizedConv3d(filters_in, filters_in, 3, padding=1)
         self.conv2 = EqualizedConv3d(filters_in, filters_out, 3, padding=1)
         self.lrelu = nn.LeakyReLU(negative_slope=0.2)
@@ -135,20 +138,19 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         self.channels = base_shape[0]
         self.base_shape = base_shape[1:]
-        
         self.phase = phase
-        self.fromrgbs = nn.ModuleDict()
-        filters_out = num_filters(phase, num_phases, base_dim)
-        self.fromrgbs[f'from_rgb_{phase}'] = FromRGB(self.channels, filters_out)
-        filters_out_prev = num_filters(phase - 1, num_phases, base_dim)
-        self.fromrgbs[f'from_rgb_{phase - 1}'] = FromRGB(self.channels, filters_out_prev)
-
-        self.blocks = nn.ModuleDict()
-        for i in reversed(range(1, phase)):
-            filters_in = num_filters(i + 1, num_phases, base_dim)
-            filters_out = num_filters(i, num_phases, base_dim)
-            self.blocks[f'discriminator_block_{i + 1}'] = DiscriminatorBlock(filters_in, filters_out)
         
+        self.fromrgbs = nn.ModuleList()        
+        self.blocks = nn.ModuleList()
+
+        for i in reversed(range(2, num_phases + 1)):
+            filters_in = num_filters(i, num_phases, base_dim)
+            filters_out = num_filters(i - 1, num_phases, base_dim)
+            self.blocks.append(DiscriminatorBlock(filters_in, filters_out))                   
+            self.fromrgbs.append(FromRGB(self.channels, filters_in))
+        
+        self.fromrgbs.append(FromRGB(self.channels, base_dim))
+
         self.downscale = nn.AvgPool3d(2)
             
         self.discriminator_out = nn.Sequential(
@@ -164,26 +166,28 @@ class Discriminator(nn.Module):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.to(self.device)
     
-    
-    def forward(self, input, alpha=0):
+    def forward(self, input, alpha):
         
         input = input.to(self.device)
-                
-        x = self.fromrgbs[f'from_rgb_{self.phase}'](input)
-                                
+        
+        x_downscale = input.clone()
+        
+        x = self.fromrgbs[-self.phase](input)
+        print(x.sum(), 'fromrgb')
+                        
         for i in reversed(range(1, self.phase)):
-            x = self.blocks[f'discriminator_block_{i + 1}'](x)
-            
-            if i == self.phase - 1:
-                x_downscale = self.downscale(input)
-                fromrgb_prev = self.fromrgbs[f'from_rgb_{i}'](x_downscale)
-                x = alpha * fromrgb_prev + (1 - alpha) * x
-            
+            x = self.blocks[-i](x)
+
+            print(x.sum())
+            x_downscale = self.downscale(x_downscale)
+            fromrgb_prev = self.fromrgbs[-i](x_downscale)
+            print(fromrgb_prev.sum(), 'fromrgb_prev')
+            x = alpha * fromrgb_prev + (1 - alpha) * x
+            print(x.sum(), 'x')
         x = self.discriminator_out(x)
+        print('out', x.sum())
         return x
-            
-            
-                    
+    
         
 class ChannelNormalization(nn.Module):
     def __init__(self):
@@ -199,7 +203,7 @@ class GeneratorBlock(nn.Sequential):
         self.upsampling = nn.Upsample(scale_factor=2)
         self.conv1 = EqualizedConv3d(filters_in, filters_out, 3, padding=1)
         self.conv2 = EqualizedConv3d(filters_out, filters_out, 3, padding=1)
-        self.lrelu = nn.LeakyReLU(negative_slope=0.2, inplace=True)
+        self.lrelu = nn.LeakyReLU(negative_slope=0.2)
         self.cn = ChannelNormalization()
     
     def forward(self, input):
@@ -238,53 +242,43 @@ class Generator(nn.Module):
         self.base_shape = base_shape[1:]
         self.phase = phase
         self.latent_dim = latent_dim
-        filters = base_dim
+        filters_out = base_dim
         self.generator_in = nn.Sequential(
-            EqualizedLinear(latent_dim, np.product(self.base_shape) * filters),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
-            Reshape([-1, filters] + list(self.base_shape)),
-            EqualizedConv3d(filters, filters, 3, padding=1),
-            nn.LeakyReLU(negative_slope=0.2, inplace=True),
+            EqualizedLinear(latent_dim, np.product(self.base_shape) * filters_out),
+            nn.LeakyReLU(negative_slope=0.2),
+            Reshape([-1, filters_out] + list(self.base_shape)),
+            EqualizedConv3d(filters_out, filters_out, 3, padding=1),
+            nn.LeakyReLU(negative_slope=0.2),
             ChannelNormalization(),
         )
-         
-        self.blocks = nn.ModuleDict()
+                
+        self.blocks = nn.ModuleList()
+        self.to_rgbs = nn.ModuleList([ToRGB(filters_out, self.channels)])
         
-        for i in range(1, phase):
+        for i in range(2, num_phases + 1):
+            print(f'\n\n\n phase {i}\n\n')
             filters_in = num_filters(i, num_phases, base_dim)
             filters_out = num_filters(i + 1, num_phases, base_dim)
-            self.blocks[f'generator_block_{i + 1}'] = GeneratorBlock(filters_in, filters_out)
+            self.blocks.append(GeneratorBlock(filters_in, filters_out))
+            self.to_rgbs.append(ToRGB(filters_out, self.channels))
         
-        self.to_rgbs = nn.ModuleDict()
-        filters_phase = num_filters(phase, num_phases, base_dim)
-        self.to_rgbs[f'to_rgb_{phase}'] = ToRGB(filters_phase, self.channels)
-        
-        if phase > 1:
-            filters_prev_phase = num_filters(phase - 1, num_phases, base_dim)
-            self.to_rgbs[f'to_rgb_{phase - 1}'] = ToRGB(filters_prev_phase, self.channels)
-        
-
         self.upsample = nn.Upsample(scale_factor=2)
         
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.to(self.device)
                 
-    def forward(self, input, alpha=0):
+    def forward(self, input, alpha):
         input = input.to(self.device)
-        
         x = self.generator_in(input)
         
-        x_upsampled = None
-        for i in range(1, self.phase):
-            
-            if i == self.phase - 1:
-                x_upsampled = self.to_rgbs[f'to_rgb_{i}'](self.upsample(x))
-            
-            x = self.blocks[f'generator_block_{i + 1}'](x)
-            
-        x = self.to_rgbs[f'to_rgb_{self.phase}'](x)
+        all_out = []
         
-        if x_upsampled is not None:
-            x = alpha * x_upsampled + (1 - alpha) * x
-    
-        return x
+        images_out = self.to_rgbs[0](x)
+        all_out.append(images_out)
+        for i in range(0, self.phase - 1):
+            x = self.blocks[i](x)
+            img_gen = self.to_rgbs[i + 1](x)
+            images_out = alpha * (self.upsample(images_out)) + (1 - alpha) * img_gen
+            all_out.append(images_out)
+        
+        return all_out 
