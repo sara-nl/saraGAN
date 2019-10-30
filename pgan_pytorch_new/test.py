@@ -1,6 +1,6 @@
 import argparse
 import numpy as np
-from network import Generator, Discriminator
+from network_dict import Generator, Discriminator
 import datetime
 import torch
 import os
@@ -133,16 +133,12 @@ def main(args):
     zdim_base = max(1, args.final_zdim // (2 ** ((num_phases - 1))))
     
     # Get Networks
-    generator = Generator(phase, num_phases, 
-                          args.base_dim, args.latent_dim, (1, zdim_base, 4, 4))
-    discriminator = Discriminator(phase, num_phases, 
-                          args.base_dim, args.latent_dim, (1, zdim_base, 4, 4))
-    
+    generator = Generator(phase, num_phases, args.base_dim, args.latent_dim, (1, zdim_base, 4, 4), nonlinearity='leaky_relu', param=0.3)
 
     generator.eval()
         
     print(f"Loading weights from {args.run_dir}")
-    generator.load_state_dict(torch.load(args.run_dir))
+    generator.load_state_dict(torch.load(args.run_dir, map_location=torch.device('cpu')))
     
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
     log_dir = os.path.join('results', f'{args.resolution}x{args.resolution}', timestamp)
@@ -160,7 +156,7 @@ def main(args):
     
     for i, output in enumerate(outputs):
         output = output.squeeze().cpu().numpy()
-        output = (output * args.intercept + args.intercept).astype(np.int16)
+        output = (output * args.intercept).astype(np.int16)
         print(output.min(), output.max(), output.shape)
         
         # write_image(output, os.path.join(log_dir, f'{i:02}.dcm'), metadata=metadata)
@@ -192,16 +188,12 @@ def main(args):
         os.makedirs(output_dir)
         list(map(lambda j: writeSlices(writer, series_tag_values, new_img, output_dir, j), range(new_img.GetDepth())))
 
-        
-    
-
-
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('resolution', type=int)
     parser.add_argument('run_dir', type=str)
-    parser.add_argument('--intercept', type=int, default=-1024)
+    parser.add_argument('--intercept', type=int, default=1024)
     parser.add_argument('--num_samples', type=int, default=1)
     parser.add_argument('--final_resolution', type=int, default=512)
     parser.add_argument('--final_zdim', type=int, default=128)
