@@ -11,3 +11,6 @@ checkpoints/
 *.out
 .ipynb_checkpoints/
 runs/
+runs/*
+results/*
+results/
