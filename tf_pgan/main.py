@@ -108,34 +108,35 @@ def main(args, config):
         drift_loss = 1e-3 * tf.reduce_mean(disc_real_d ** 2)
         disc_loss = wgan_disc_loss + gp_loss + drift_loss
 
-        real_ext_d = tf.reshape(resnet(real_image_input), (batch_size,))
-        fake_ext_d = tf.reshape(resnet(gen_sample_d, is_reuse=True), (batch_size,))
+        if args.use_ext_clf:
+            real_ext_d = tf.reshape(resnet(real_image_input), (batch_size,))
+            fake_ext_d = tf.reshape(resnet(gen_sample_d, is_reuse=True), (batch_size,))
 
-        real_labels = tf.ones(tf.shape(real_ext_d))
-        fake_labels = tf.zeros(tf.shape(real_ext_d))
+            real_labels = tf.ones(tf.shape(real_ext_d))
+            fake_labels = tf.zeros(tf.shape(real_ext_d))
 
-        ext_d_real_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=real_labels,
-                                                                  logits=real_ext_d)
-        ext_d_fake_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=fake_labels,
-                                                                  logits=fake_ext_d)
+            ext_d_real_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=real_labels,
+                                                                      logits=real_ext_d)
+            ext_d_fake_loss = tf.nn.sigmoid_cross_entropy_with_logits(labels=fake_labels,
+                                                                      logits=fake_ext_d)
 
-        ext_d_loss = tf.reduce_mean(ext_d_real_loss) + tf.reduce_mean(ext_d_fake_loss)
+            ext_d_loss = tf.reduce_mean(ext_d_real_loss) + tf.reduce_mean(ext_d_fake_loss)
 
-        ext_d_accuracy_real = tf.keras.metrics.binary_accuracy(real_labels, tf.sigmoid(real_ext_d))
-        ext_d_accuracy_fake = tf.keras.metrics.binary_accuracy(fake_labels, tf.sigmoid(fake_ext_d))
-        ext_d_accuracy = (ext_d_accuracy_real + ext_d_accuracy_fake) / 2
+            ext_d_accuracy_real = tf.keras.metrics.binary_accuracy(real_labels, tf.sigmoid(real_ext_d))
+            ext_d_accuracy_fake = tf.keras.metrics.binary_accuracy(fake_labels, tf.sigmoid(fake_ext_d))
+            ext_d_accuracy = (ext_d_accuracy_real + ext_d_accuracy_fake) / 2
 
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
             print(f"Discriminator parameters:: {count_parameters('discriminator')}")
-            print(f"Resnet parameters: {count_parameters('resnet')}")
+            if args.use_ext_clf:
+                print(f"Resnet parameters: {count_parameters('resnet')}")
 
 
         # Build Optimizers
         with tf.variable_scope('optim_ops'):
             optimizer_gen = tf.train.AdamOptimizer(learning_rate=0.001, beta1=0, beta2=.9)
             optimizer_disc = tf.train.AdamOptimizer(learning_rate=0.001, beta1=0, beta2=.9)
-            optimizer_resnet = tf.train.AdamOptimizer()
 
             # Training Variables for each optimizer
             # By default in TensorFlow, all variables are updated by each optimizer, so we
@@ -144,24 +145,29 @@ def main(args, config):
             gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
             # Discriminator Network Variables
             disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-            resnet_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='resnet')
+            if args.use_ext_clf:
+                resnet_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='resnet')
 
             if args.horovod:
                 optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
                 optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
-                optimizer_resnet = hvd.DistributedOptimizer(optimizer_resnet)
 
             # Create training operations
             train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
             train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
-            train_resnet = optimizer_resnet.minimize(ext_d_loss, var_list=resnet_vars)
+            if args.use_ext_clf:
+                optimizer_resnet = tf.train.AdamOptimizer()
+                if args.horovod:
+                    optimizer_resnet = hvd.DistributedOptimizer(optimizer_resnet)
+                train_resnet = optimizer_resnet.minimize(ext_d_loss, var_list=resnet_vars)
 
         with tf.name_scope('summaries'):
             # Summaries
             tf.summary.scalar('d_loss', disc_loss)
             tf.summary.scalar('g_loss', gen_loss)
             tf.summary.scalar('gp', gp_loss)
-            tf.summary.scalar('ext_d_loss', ext_d_loss)
+            if args.use_ext_clf:
+                tf.summary.scalar('ext_d_loss', ext_d_loss)
 
             real_image_grid = tf.transpose(real_image_input[0], (1, 2, 3, 0))
             shape = real_image_grid.get_shape().as_list()
@@ -206,8 +212,8 @@ def main(args, config):
                 sess.run(hvd.broadcast_global_variables(0))
 
             local_step = 0
-            ext_d_accuracies = []
-            ext_d_losses = []
+            if args.use_ext_clf:
+                ext_d_accuracies = []
 
             while True:
 
@@ -216,56 +222,52 @@ def main(args, config):
                     # Broadcast variables every 128 gradient steps.
                     sess.run(hvd.broadcast_global_variables(0))
 
-                if local_step % 128 == 0 and verbose and args.profile:
-
-                    run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                    run_metadata = tf.RunMetadata()
-
+                if args.use_ext_clf:
                     _, _, _, summary, d_loss, g_loss, res_acc, res_loss = sess.run(
                         [train_gen, train_disc, train_resnet, merged_summaries, disc_loss,
-                         gen_loss, ext_d_accuracy, ext_d_loss],
-                        options=run_options,
-                        run_metadata=run_metadata)
-                    writer.add_run_metadata(run_metadata, 'step%d' % global_step)
+                         gen_loss, ext_d_accuracy, ext_d_loss]
+                    )
 
                 else:
-                    _, _, _, summary, d_loss, g_loss, res_acc, res_loss = sess.run(
-                        [train_gen, train_disc, train_resnet, merged_summaries, disc_loss,
-                         gen_loss, ext_d_accuracy, ext_d_loss],)
+                     _, _, summary, d_loss, g_loss, = sess.run(
+                        [train_gen, train_disc, merged_summaries, disc_loss, gen_loss]
+                     )
 
                 end = time.time()
                 img_s = global_size * batch_size / (end - start)
+
+                global_step += batch_size * global_size
+                local_step += 1
 
                 if verbose:
                     writer.add_summary(summary, global_step)
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                        global_step)
 
-                    ext_d_accuracies.append(res_acc)
-                    ext_d_losses.append(res_loss)
-                    ext_d_accuracies = ext_d_accuracies[-256:]
-                    ext_d_losses = ext_d_losses[-256:]
-                    mean_d_accuracy = np.mean(ext_d_accuracies)
-                    mean_d_loss = np.mean(ext_d_losses)
-                    writer.add_summary(tf.Summary(
-                        value=[tf.Summary.Value(tag='ext_d_accuracy',
-                                                simple_value=mean_d_accuracy)]),
-                        global_step)
+                    if args.use_ext_clf:
+                        ext_d_accuracies.append(res_acc)
+                        ext_d_accuracies = ext_d_accuracies[-256:]
+                        mean_d_accuracy = np.mean(ext_d_accuracies)
+                        writer.add_summary(tf.Summary(
+                            value=[tf.Summary.Value(tag='ext_d_accuracy',
+                                                    simple_value=mean_d_accuracy)]),
+                            global_step)
 
-                global_step += batch_size * global_size
+                        print(f"Step {global_step:09} \t"
+                              f"img/s {img_s:.2f} \t "
+                              f"d_loss {d_loss:.4f} \t "
+                              f"g_loss {g_loss:.4f} \t "
+                              f"ext_d_accuracy {mean_d_accuracy:.4f} \t "
+                              f"ext_d_loss {res_loss:.4f} \t "
+                              f"alpha {alpha.eval():.2f}")
+                    else:
+                        print(f"Step {global_step:09} \t"
+                              f"img/s {img_s:.2f} \t "
+                              f"d_loss {d_loss:.4f} \t "
+                              f"g_loss {g_loss:.4f} \t "
+                              f"alpha {alpha.eval():.2f}")
 
                 sess.run(update_alpha)
-
-                if verbose:
-                    print(f"Step {global_step:09} \t"
-                          f"img/s {img_s:.2f} \t "
-                          f"d_loss {d_loss:.4f} \t "
-                          f"g_loss {g_loss:.4f} \t "
-                          f"ext_d_accuracy {mean_d_accuracy:.4f} \t "
-                          f"ext_d_loss {mean_d_loss:.4f} \t "
-                          f"alpha {alpha.eval():.2f}")
-
-                local_step += 1
 
                 if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) + args.mixing_nimg:
                     break
@@ -278,68 +280,76 @@ def main(args, config):
             sess.run(alpha.assign(0))
             while True:
                 start = time.time()
-
                 assert alpha.eval() == 0
                 # Broadcast variables every 128 gradient steps.
                 if local_step % 128 == 0 and args.horovod:
                     sess.run(hvd.broadcast_global_variables(0))
 
-                if local_step % 128 == 0 and verbose and args.profile:
-                    run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                    run_metadata = tf.RunMetadata()
-
-                    _, _, _, summary, d_loss, g_loss, res_acc= sess.run(
-                        [train_gen, train_disc, train_resnet, merged_summaries, disc_loss,
-                         gen_loss, ext_d_accuracy],
-                        options=run_options,
-                        run_metadata=run_metadata)
-
-                    writer.add_run_metadata(run_metadata, 'step%d' % global_step)
-
-                else:
+                if args.use_ext_clf:
                     _, _, _, summary, d_loss, g_loss, res_acc = sess.run(
                         [train_gen, train_disc, train_resnet, merged_summaries, disc_loss,
                          gen_loss, ext_d_accuracy],)
+                else:
+                     _, _,  summary, d_loss, g_loss = sess.run(
+                         [train_gen, train_disc,  merged_summaries, disc_loss, gen_loss])
 
                 end = time.time()
-
                 img_s = global_size * batch_size / (end - start)
-
-                if verbose:
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
-                                       global_step)
-                    writer.add_summary(summary, global_step)
-
-                    ext_d_accuracies.append(res_acc)
-                    ext_d_losses.append(res_loss)
-                    ext_d_accuracies = ext_d_accuracies[-256:]
-                    ext_d_losses = ext_d_losses[-256:]
-                    mean_d_accuracy = np.mean(ext_d_accuracies)
-                    mean_d_loss = np.mean(ext_d_losses)
-                    writer.add_summary(tf.Summary(
-                        value=[tf.Summary.Value(tag='ext_d_accuracy',
-                                                simple_value=mean_d_accuracy)]),
-                        global_step)
-
                 global_step += batch_size * global_size
                 local_step += 1
 
                 if verbose:
-                    print(f"Step {global_step:09} \t"
-                          f"img/s {img_s:.2f} \t "
-                          f"d_loss {d_loss:.4f} \t "
-                          f"g_loss {g_loss:.4f} \t "
-                          f"ext_d_accuracy {res_acc:.4f} \t "
-                          f"ext_d_loss {res_loss:.4f} \t "
-                          f"alpha {alpha.eval():.2f}")
+                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]), global_step)
+                    writer.add_summary(summary, global_step)
+
+                    if args.use_ext_clf:
+                        ext_d_accuracies.append(res_acc)
+                        ext_d_accuracies = ext_d_accuracies[-256:]
+                        mean_d_accuracy = np.mean(ext_d_accuracies)
+                        writer.add_summary(tf.Summary(
+                            value=[tf.Summary.Value(tag='ext_d_accuracy',
+                                                    simple_value=mean_d_accuracy)]),
+                            global_step)
+
+                        print(f"Step {global_step:09} \t"
+                              f"img/s {img_s:.2f} \t "
+                              f"d_loss {d_loss:.4f} \t "
+                              f"g_loss {g_loss:.4f} \t "
+                              f"ext_d_accuracy {mean_d_accuracy:.4f} \t "
+                              f"ext_d_loss {res_loss:.4f} \t "
+                              f"alpha {alpha.eval():.2f}")
+                    else:
+                        print(f"Step {global_step:09} \t"
+                              f"img/s {img_s:.2f} \t "
+                              f"d_loss {d_loss:.4f} \t "
+                              f"g_loss {g_loss:.4f} \t "
+                              f"alpha {alpha.eval():.2f}")
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
+
+                    # if verbose:
+                    #     run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
+                    #     run_metadata = tf.RunMetadata()
+
+                    #     if args.use_ext_clf:
+                    #         sess.run(
+                    #             [train_gen, train_disc, train_resnet, merged_summaries, disc_loss, gen_loss, ext_d_accuracy],
+                    #             options=run_options,
+                    #             run_metadata=run_metadata)
+                    #     else:
+                    #         sess.run(
+                    #             [train_gen, train_disc, merged_summaries, disc_loss, gen_loss],
+                    #             options=run_options,
+                    #             run_metadata=run_metadata)
+
+                    #     writer.add_run_metadata(run_metadata, 'step%d' % global_step)
+
                     break
 
             # Calculate Fids
-            if args.calc_fids:
-                num_fids_to_calculate = args.num_fids
 
+            print(hvd.rank())
+            if args.calc_metrics:
                 fids_local = []
                 swds_local = []
                 counter = 0
@@ -351,6 +361,8 @@ def main(args, config):
                     real_batch = np.stack([npy_data[i] for i in range(start_loc, start_loc + batch_size)])
                     real_batch = real_batch / 1024 - 1
                     fake_batch = sess.run(gen_sample_d)
+
+                    print(hvd.rank(), real_batch.shape)
 
                     # [-1, 2] -> [0, 255]
                     normalize_op = lambda x: np.clip((((x / 3) + 1 / 3) * 255).astype(np.int16),
@@ -370,7 +382,7 @@ def main(args, config):
                     else:
                         counter += batch_size
 
-                    if counter >= num_fids_to_calculate:
+                    if counter >= args.num_metric_samples:
                         break
 
                 fid_local = np.mean(fids_local)
@@ -388,10 +400,8 @@ def main(args, config):
                 else:
                     swds = swds_local
 
-            if verbose:
-                print("\n\n\n End of phase.")
 
-                if args.calc_fids:
+                if verbose:
                     print(f"FID: {fid:.4f}")
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='fid',
                                                                           simple_value=fid)]),
@@ -410,7 +420,8 @@ def main(args, config):
                                                                               -1])]),
                                            global_step)
 
-                print(f"Ext D Accuracy {mean_d_accuracy} \n\n\n")
+            if verbose:
+                print("\n\n\n End of phase.")
 
                 # Save Session.
                 # var_list = tf.trainable_variables()
@@ -438,9 +449,9 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--horovod', default=False, action='store_true')
     parser.add_argument('--fp16_allreduce', default=False, action='store_true')
-    parser.add_argument('--profile', default=False, action='store_true')
-    parser.add_argument('--calc_fids', default=False, action='store_true')
-    parser.add_argument('--num_fids', type=int, default=512)
+    parser.add_argument('--calc_metrics', default=False, action='store_true')
+    parser.add_argument('--use_ext_clf', default=False, action='store_true')
+    parser.add_argument('--num_metric_samples', type=int, default=512)
     args = parser.parse_args()
 
     config = tf.ConfigProto()
