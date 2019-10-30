@@ -1,3 +1,7 @@
+*.tar.gz
+models/
+legacy/
+*.DS_Store
 .idea/ -
 .DS_Store
 .idea/
@@ -6,3 +10,4 @@ logs/
 checkpoints/
 *.out
 .ipynb_checkpoints/
+runs/

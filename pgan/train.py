@@ -143,7 +143,7 @@ def main(args):
         shape = (size, size, size, 1)
         
         if args.phase_1_batch_size:
-            batch_size = args.phase_1_batch_size // phase
+            batch_size = args.phase_1_batch_size // (2 ** (phase - 1))
         else:
             batch_size = 512 // size
         batch_size = max(1, batch_size)

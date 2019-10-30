@@ -2,8 +2,11 @@
 
 #SBATCH -p gpu
 #SBATCH -t 96:00:00
-#SBATCH -N 4
-#SBATCH -n 8
+# #SBATCH -p broadwell_short
+# #SBATCH -t 1:00:00
+#SBATCH -N 8
+#SBATCH -n 16
+#SBATCH -o ./stdout/slurm-%j.out
 
 module purge
 module load surf-devel
@@ -36,6 +39,7 @@ VIRTENV_ROOT=~/virtualenvs
 echo "Sourcing virtual environment $VIRTENV_ROOT/$VIRTENV/bin/activate"
 source $VIRTENV_ROOT/$VIRTENV/bin/activate
 
-export OMP_NUM_THREADS=16
+# export OMP_NUM_THREADS=16
 # mpirun -n 16 python train_hvd.py /lustre4/2/managed_datasets/LIDC-IDRI/ 8 --base_dim 256 --latent_dim 256 --mixing_epochs 128 --stabilizing_epochs 128 --training_ratio 1 --horovod
-mpirun -N 4 -npernode 2 python train.py /lustre4/2/managed_datasets/LIDC-IDRI/ 512 --base_dim 256 --latent_dim 256 --mixing_epochs 256 --stabilizing_epochs 256 --training_ratio 1 --starting_phase 3 --phase_1_batch_size 32 --horovod
+mpirun -n 16 python train.py /lustre4/2/managed_datasets/LIDC-IDRI/ 512 --base_dim 256 --latent_dim 256 --mixing_epochs 256 --stabilizing_epochs 256 --training_ratio 1 --starting_phase 1 --phase_1_batch_size 8 --horovod
+

@@ -1,0 +1,16 @@
+#!/bin/bash
+
+#SBATCH -N 4
+#SBATCH -n 8
+#SBATCH -t 36:00:00
+#SBATCH -p broadwell
+
+source /home/davidr/tf_cpu.sh
+module unload OpenMPI
+module load impi/2018.3.222-iccifort-2018.3.222-GCC-7.3.0-2.30
+
+module list
+cd /home/davidr/projects/saraGAN/tf_pgan/
+
+mpirun -np 8 --map-by ppr:1:socket:pe=16 python -u main.py /lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/ 512 128 --starting_phase 2 --horovod
+
