@@ -51,6 +51,7 @@ def image_grid(input_tensor, grid_shape, image_shape=(32, 32), num_channels=3):
     input_tensor = array_ops.transpose(input_tensor, [0, 2, 1, 3])
     input_tensor = array_ops.reshape(
         input_tensor, [1, height, width, num_channels])
+
     return input_tensor
 
 

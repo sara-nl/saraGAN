@@ -4,7 +4,7 @@ import numpy as np
 
 def resnet_block(x):
     x_shape = x.get_shape().as_list()
-    channels = min(512, x_shape[1] * 4)
+    channels = min(128, x_shape[1] * 4)
     with tf.variable_scope('conv1'):
         x_1 = tf.layers.conv3d(x, channels, 3, padding='same', activation='relu',
                                data_format='channels_first')
