@@ -171,7 +171,7 @@ def main(args, config):
 
             real_image_grid = tf.transpose(real_image_input[0], (1, 2, 3, 0))
             shape = real_image_grid.get_shape().as_list()
-            grid_cols = int(2 ** np.floor(np.log(shape[0]) / np.log(2)))
+            grid_cols = int(2 ** np.floor(np.log(np.sqrt(shape[0])) / np.log(2)))
             grid_rows = shape[0] // grid_cols
             grid_shape = [grid_rows, grid_cols]
             real_image_grid = image_grid(real_image_grid, grid_shape, image_shape=shape[1:3],
