@@ -21,7 +21,6 @@ def main(args, config):
     num_phases = int(np.log2(args.final_resolution) - 1)
     var_list = None
     if args.horovod:
-        print('hiiiiiii', hvd.rank())
         verbose = hvd.rank() == 0
         global_size = hvd.size()
     else:
@@ -33,13 +32,16 @@ def main(args, config):
 
     if verbose:
         writer = tf.summary.FileWriter(logdir=logdir)
+        print("Arguments passed:")
+        print(args)
+        print(f"Saving files to {logdir}")
 
     else:
         writer = None
 
     global_step = 0
 
-    for phase in range(args.starting_phase, num_phases + 1):
+    for phase in range(1, num_phases + 1):
 
         tf.reset_default_graph()
         # Get Dataset.
@@ -97,7 +99,7 @@ def main(args, config):
         gen_loss = -tf.reduce_mean(disc_fake_d)
 
         gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
-        interpolates = real_image_input + gamma * (gen_sample_d - real_image_input)
+        interpolates = real_image_input + gamma * (tf.stop_gradient(gen_sample_d) - real_image_input)
         gradients = tf.gradients(discriminator(interpolates, alpha, phase,
                                                num_phases, args.base_dim, is_reuse=True, activation=args.activation,
                                                param=args.leakiness), [interpolates])[0]
@@ -132,11 +134,32 @@ def main(args, config):
             if args.use_ext_clf:
                 print(f"Resnet parameters: {count_parameters('resnet')}")
 
-
         # Build Optimizers
         with tf.variable_scope('optim_ops'):
-            optimizer_gen = tf.train.AdamOptimizer(learning_rate=0.001, beta1=0, beta2=.9)
-            optimizer_disc = tf.train.AdamOptimizer(learning_rate=0.001, beta1=0, beta2=.9)
+
+            g_lr = args.learning_rate
+            d_lr = args.learning_rate
+
+            if args.horovod and args.lr_scaling:
+                if args.lr_scaling == 'sqrt':
+                    g_lr = g_lr * np.sqrt(hvd.size())
+                    d_lr = d_lr * np.sqrt(hvd.size())
+
+                elif args.lr_scaling == 'linear':
+                    g_lr = g_lr * hvd.size()
+                    d_lr = d_lr * hvd.size()
+
+                elif args.lr_scaling == 'none':
+                    pass
+                else:
+                    raise ValueError(args.lr_scaling)
+
+            if args.lr_annealing:
+                g_lr = tf.Variable(g_lr, name='g_lr')
+                update_g_lr = g_lr.assign(g_lr * args.lr_annealing)
+
+            optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+            optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
             # Training Variables for each optimizer
             # By default in TensorFlow, all variables are updated by each optimizer, so we
@@ -156,7 +179,19 @@ def main(args, config):
             train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
             train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
             if args.use_ext_clf:
-                optimizer_resnet = tf.train.AdamOptimizer()
+                res_lr = args.learning_rate
+                if args.lr_scaling == 'sqrt':
+                    res_lr = res_lr * np.sqrt(hvd.size())
+                elif args.lr_scaling == 'linear':
+                    res_lr = res_lr * hvd.size()
+                elif args.lr_scaling == 'none':
+                    pass
+                else:
+                    raise ValueError(args.lr_scaling)
+
+                if args.horovod and args.lr_scaling:
+                    res_lr = res_lr * np.sqrt(hvd.size())
+                optimizer_resnet = tf.train.AdamOptimizer(learning_rate=res_lr)
                 if args.horovod:
                     optimizer_resnet = hvd.DistributedOptimizer(optimizer_resnet)
                 train_resnet = optimizer_resnet.minimize(ext_d_loss, var_list=resnet_vars)
@@ -191,19 +226,35 @@ def main(args, config):
             tf.summary.scalar('real_image_max', tf.math.reduce_max(real_image_input[0]))
             tf.summary.scalar('alpha', alpha)
 
+            if args.lr_annealing:
+                tf.summary.scalar('g_lr', g_lr)
+
             merged_summaries = tf.summary.merge_all()
 
         with tf.Session(config=config) as sess:
 
             sess.run(tf.global_variables_initializer())
 
-            if var_list is not None:
+            if var_list is not None and phase > args.starting_phase:
                 var_names = [v.name for v in var_list]
                 trainable_variable_names = [v.name for v in tf.trainable_variables()]
                 load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
                 saver = tf.train.Saver(load_vars)
                 print(f"Restoring session with {var_names} variables.")
                 saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
+
+            elif var_list is not None and args.continue_path and phase == args.starting_phase:
+                var_names = [v.name for v in var_list]
+                trainable_variable_names = [v.name for v in tf.trainable_variables()]
+                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
+                saver = tf.train.Saver(load_vars)
+                print(f"Restoring session with {var_names} variables.")
+                saver.restore(sess, os.path.join(args.continue_path, f'model_{phase - 1}'))
+
+            var_list = gen_vars + disc_vars
+
+            if phase < args.starting_phase:
+                continue
 
             sess.run(init_alpha)
             if verbose:
@@ -218,9 +269,12 @@ def main(args, config):
             while True:
 
                 start = time.time()
-                if local_step % 128 == 0 and args.horovod:
-                    # Broadcast variables every 128 gradient steps.
-                    sess.run(hvd.broadcast_global_variables(0))
+                if local_step % 128 == 0:
+                    if args.horovod:
+                        # Broadcast variables every 128 gradient steps.
+                        sess.run(hvd.broadcast_global_variables(0))
+                    saver = tf.train.Saver(var_list)
+                    saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
                 if args.use_ext_clf:
                     _, _, _, summary, d_loss, g_loss, res_acc, res_loss = sess.run(
@@ -229,7 +283,7 @@ def main(args, config):
                     )
 
                 else:
-                     _, _, summary, d_loss, g_loss, = sess.run(
+                    _, _, summary, d_loss, g_loss, = sess.run(
                         [train_gen, train_disc, merged_summaries, disc_loss, gen_loss]
                      )
 
@@ -268,8 +322,11 @@ def main(args, config):
                               f"alpha {alpha.eval():.2f}")
 
                 sess.run(update_alpha)
+                if args.lr_annealing:
+                    sess.run(update_g_lr)
 
-                if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) + args.mixing_nimg:
+                if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) \
+                        + args.mixing_nimg:
                     break
 
                 assert alpha.eval() >= 0
@@ -282,15 +339,18 @@ def main(args, config):
                 start = time.time()
                 assert alpha.eval() == 0
                 # Broadcast variables every 128 gradient steps.
-                if local_step % 128 == 0 and args.horovod:
-                    sess.run(hvd.broadcast_global_variables(0))
+                if local_step % 128 == 0:
+                    if args.horovod:
+                        sess.run(hvd.broadcast_global_variables(0))
+                    saver = tf.train.Saver(var_list)
+                    saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
                 if args.use_ext_clf:
                     _, _, _, summary, d_loss, g_loss, res_acc = sess.run(
                         [train_gen, train_disc, train_resnet, merged_summaries, disc_loss,
                          gen_loss, ext_d_accuracy],)
                 else:
-                     _, _,  summary, d_loss, g_loss = sess.run(
+                    _, _,  summary, d_loss, g_loss = sess.run(
                          [train_gen, train_disc,  merged_summaries, disc_loss, gen_loss])
 
                 end = time.time()
@@ -325,6 +385,9 @@ def main(args, config):
                               f"g_loss {g_loss:.4f} \t "
                               f"alpha {alpha.eval():.2f}")
 
+                    if args.lr_annealing:
+                        sess.run(update_g_lr)
+
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
 
                     # if verbose:
@@ -346,9 +409,9 @@ def main(args, config):
 
                     break
 
-            # Calculate Fids
+            # Calculate metrics.
+            calc_swds: bool = size >= 16
 
-            print(hvd.rank())
             if args.calc_metrics:
                 fids_local = []
                 swds_local = []
@@ -362,25 +425,24 @@ def main(args, config):
                     real_batch = real_batch / 1024 - 1
                     fake_batch = sess.run(gen_sample_d)
 
-                    print(hvd.rank(), real_batch.shape)
-
                     # [-1, 2] -> [0, 255]
                     normalize_op = lambda x: np.clip((((x / 3) + 1 / 3) * 255).astype(np.int16),
                                                      0, 255)
 
-                    print(real_batch.min(), real_batch.max(), real_batch.shape)
-                    print(fake_batch.min(), fake_batch.max(), fake_batch.shape)
                     fids_local.append(get_fid_for_volumes(real_batch, fake_batch, normalize_op))
+                    print(fids_local)
 
-                    if real_batch.shape[-1] >= 8:
-                        swds = get_swd_for_volumes(real_batch, fake_batch)
+                    if calc_swds:
+                        noise = 1e-7 * np.random.randn()
+                        swds = get_swd_for_volumes(real_batch + noise, fake_batch + noise)
                         swds_local.append(swds)
 
                     if args.horovod:
-                        print(counter, batch_size, hvd.size() * batch_size)
-                        counter = counter + hvd.size() * batch_size
+                        counter = counter + global_size * batch_size
                     else:
                         counter += batch_size
+
+                    print(counter, args.num_metric_samples)
 
                     if counter >= args.num_metric_samples:
                         break
@@ -392,14 +454,14 @@ def main(args, config):
                     fid = fid_local
 
                 # swds_local explanation: list of laplacian polytope: (16x16, 32x32, 64x64..., MEAN)
-                swds_local = np.array(swds_local)
-                # Average over batches
-                swds_local = swds_local.mean(axis=0)
-                if args.horovod:
-                    swds = MPI.COMM_WORLD.allreduce(swds_local, op=MPI.SUM) / hvd.size()
-                else:
-                    swds = swds_local
-
+                if calc_swds:
+                    swds_local = np.array(swds_local)
+                    # Average over batches
+                    swds_local = swds_local.mean(axis=0)
+                    if args.horovod:
+                        swds = MPI.COMM_WORLD.allreduce(swds_local, op=MPI.SUM) / hvd.size()
+                    else:
+                        swds = swds_local
 
                 if verbose:
                     print(f"FID: {fid:.4f}")
@@ -407,27 +469,31 @@ def main(args, config):
                                                                           simple_value=fid)]),
                                        global_step)
 
-
-                    print(f"SWDS: {swds}")
-                    for i in range(len(swds))[:-1]:
-                        lod = 16 * 2 ** i
-                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_{lod}',
+                    if calc_swds:
+                        print(f"SWDS: {swds}")
+                        for i in range(len(swds))[:-1]:
+                            lod = 16 * 2 ** i
+                            writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_{lod}',
+                                                                                  simple_value=swds[
+                                                                                      i])]),
+                                               global_step)
+                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
                                                                               simple_value=swds[
-                                                                                  i])]),
-                                           global_step)
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
-                                                                          simple_value=swds[
-                                                                              -1])]),
-                                           global_step)
+                                                                                  -1])]),
+                                               global_step)
 
             if verbose:
                 print("\n\n\n End of phase.")
 
                 # Save Session.
                 # var_list = tf.trainable_variables()
-                var_list = gen_vars + disc_vars
                 saver = tf.train.Saver(var_list)
                 saver.save(sess, os.path.join(logdir, f'model_{phase}'))
+
+            if args.ending_phase:
+                if phase == args.ending_phase:
+                    print("Reached final phase, breaking.")
+                    break
 
 
 if __name__ == '__main__':
@@ -436,6 +502,7 @@ if __name__ == '__main__':
     parser.add_argument('final_resolution', type=int)
     parser.add_argument('final_zdim', type=int)
     parser.add_argument('--starting_phase', type=int, default=1)
+    parser.add_argument('--ending_phase', type=int, default=None)
     parser.add_argument('--base_dim', type=int, default=256)
     parser.add_argument('--latent_dim', type=int, default=256)
     parser.add_argument('--base_batch_size', type=int, default=None)
@@ -451,7 +518,13 @@ if __name__ == '__main__':
     parser.add_argument('--fp16_allreduce', default=False, action='store_true')
     parser.add_argument('--calc_metrics', default=False, action='store_true')
     parser.add_argument('--use_ext_clf', default=False, action='store_true')
+    parser.add_argument('--lr_annealing', default=1, type=float, help='generator annealing rate, 1 is no annealing.')
     parser.add_argument('--num_metric_samples', type=int, default=512)
+    parser.add_argument('--beta1', type=float, default=0)
+    parser.add_argument('--beta2', type=float, default=0.9)
+    parser.add_argument('--lr_scaling', default='none', choices=['linear', 'sqrt', 'none'],
+                        help='How to scale learning rate with horovod size.')
+    parser.add_argument('--continue_path', default=None, type=str)
     args = parser.parse_args()
 
     config = tf.ConfigProto()
@@ -470,7 +543,6 @@ if __name__ == '__main__':
         random.seed(args.seed + hvd.rank())
 
         print(f"Rank {hvd.rank()} reporting!")
-
 
     else:
         np.random.seed(args.seed)
