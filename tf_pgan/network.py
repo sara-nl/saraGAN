@@ -59,7 +59,7 @@ def conv3d(x, fmaps, kernel, activation, param=None):
 
 def num_filters(phase, num_phases, base_dim):
     num_downscales = int(np.log2(base_dim / 16))
-    filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
+    filters = min(base_dim // (2 ** (phase - num_phases + num_downscales + 1)), base_dim)
     return filters
 
 
@@ -226,14 +226,22 @@ def test():
     num_phases = 9
     base_dim = 256
     base_shape = [1, 1, 4, 4]
-    for phase in range(1, num_phases):
+    for phase in range(8, num_phases):
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
+        print(shape)
         x = tf.random.normal(shape=shape)
-        print('Discriminator output shape:', discriminator(x, 0.5, phase, num_phases, base_dim).shape)
+        print('Discriminator output shape:', discriminator(x, 0.5, phase, num_phases, base_dim, activation='leaky_relu', param=0.3).shape)
+
+        for p in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='discriminator'):
+            print(np.product(p.shape), p.name)  # i.name if you want just a name
+
         print('Total discriminator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('discriminator')))
         z = tf.random.normal(shape=(1, 256))
-        print(generator(z, 0.5, phase, num_phases, base_dim, base_shape).shape)
+        print(generator(z, 0.5, phase, num_phases, base_dim, base_shape, activation='leaky_relu', param=0.3).shape)
+        for p in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='generator'):
+            print(np.product(p.shape), p.name)  # i.name if you want just a name
+
         print('Total generator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('generator')))
 
