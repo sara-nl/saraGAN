@@ -12,7 +12,7 @@ PARAMS = [
     ('--mixing_nimg', [2 ** 16]),  # Maybe half these to speed up the search?
     ('--stabilizing_nimg', [2 ** 16]),
     ('--learning_rate', [1e-3]),
-    ('--gp_center', [1]),
+    ('--gp_center', [0]),
     ('--gp_weight', [10]),  # Maybe change to add 20 if computation allows.
     ('--activation', ['leaky_relu']),  # Maybe add swish or leaky celu layer.
     ('--leakiness', [0.3]),
@@ -22,11 +22,13 @@ PARAMS = [
     ('--calc_metrics', ['']),
     ('--use_ext_clf', ['']),  # Comment to disable
     # ('--lr_annealing', [1, 0.999, 0.995]),
-    ('--lr_annealing', [1]),
+    ('--d_annealing', [.999]),
+    ('--g_annealing', [1]),
     ('--num_metric_samples', [128]),
-    ('--beta1', [0]),
-    ('--beta2', [0.9]),
-    ('--lr_scaling', ['none,', 'sqrt', 'linear'])
+    ('--beta1', [0, 0.1, 0.5]),
+    ('--beta2', [0.9, .99]),
+    ('--d_scaling', ['sqrt']),
+    ('--g_scaling', ['sqrt'])
 ]
 
 PARAMS_LISTS = list(PARAMS[i][1] for i in range(len(PARAMS)))

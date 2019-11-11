@@ -140,23 +140,29 @@ def main(args, config):
             g_lr = args.learning_rate
             d_lr = args.learning_rate
 
-            if args.horovod and args.lr_scaling:
-                if args.lr_scaling == 'sqrt':
+            if args.horovod:
+                if args.g_scaling == 'sqrt':
                     g_lr = g_lr * np.sqrt(hvd.size())
-                    d_lr = d_lr * np.sqrt(hvd.size())
-
-                elif args.lr_scaling == 'linear':
+                elif args.g_scaling == 'linear':
                     g_lr = g_lr * hvd.size()
-                    d_lr = d_lr * hvd.size()
-
-                elif args.lr_scaling == 'none':
+                elif args.g_scaling == 'none':
                     pass
                 else:
-                    raise ValueError(args.lr_scaling)
+                    raise ValueError(args.g_scaling)
 
-            if args.lr_annealing:
-                g_lr = tf.Variable(g_lr, name='g_lr')
-                update_g_lr = g_lr.assign(g_lr * args.lr_annealing)
+                if args.d_scaling == 'sqrt':
+                    d_lr = d_lr * np.sqrt(hvd.size())
+                elif args.d_scaling == 'linear':
+                    d_lr = d_lr * hvd.size()
+                elif args.d_scaling == 'none':
+                    pass
+                else:
+                    raise ValueError(args.d_scaling)
+
+            g_lr = tf.Variable(g_lr, name='g_lr')
+            d_lr = tf.Variable(d_lr, name='d_lr')
+            update_g_lr = g_lr.assign(g_lr * args.g_annealing)
+            update_d_lr = d_lr.assign(d_lr * args.d_annealing)
 
             optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
             optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
@@ -179,18 +185,9 @@ def main(args, config):
             train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
             train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
             if args.use_ext_clf:
-                res_lr = args.learning_rate
-                if args.lr_scaling == 'sqrt':
-                    res_lr = res_lr * np.sqrt(hvd.size())
-                elif args.lr_scaling == 'linear':
+                res_lr = 1e-3
+                if args.horovod:
                     res_lr = res_lr * hvd.size()
-                elif args.lr_scaling == 'none':
-                    pass
-                else:
-                    raise ValueError(args.lr_scaling)
-
-                if args.horovod and args.lr_scaling:
-                    res_lr = res_lr * np.sqrt(hvd.size())
                 optimizer_resnet = tf.train.AdamOptimizer(learning_rate=res_lr)
                 if args.horovod:
                     optimizer_resnet = hvd.DistributedOptimizer(optimizer_resnet)
@@ -226,8 +223,8 @@ def main(args, config):
             tf.summary.scalar('real_image_max', tf.math.reduce_max(real_image_input[0]))
             tf.summary.scalar('alpha', alpha)
 
-            if args.lr_annealing:
-                tf.summary.scalar('g_lr', g_lr)
+            tf.summary.scalar('g_lr', g_lr)
+            tf.summary.scalar('d_lr', d_lr)
 
             merged_summaries = tf.summary.merge_all()
 
@@ -322,8 +319,8 @@ def main(args, config):
                               f"alpha {alpha.eval():.2f}")
 
                 sess.run(update_alpha)
-                if args.lr_annealing:
-                    sess.run(update_g_lr)
+                sess.run(update_g_lr)
+                sess.run(update_d_lr)
 
                 if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) \
                         + args.mixing_nimg:
@@ -385,8 +382,8 @@ def main(args, config):
                               f"g_loss {g_loss:.4f} \t "
                               f"alpha {alpha.eval():.2f}")
 
-                    if args.lr_annealing:
-                        sess.run(update_g_lr)
+                    sess.run(update_g_lr)
+                    sess.run(update_d_lr)
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
 
@@ -430,7 +427,6 @@ def main(args, config):
                                                      0, 255)
 
                     fids_local.append(get_fid_for_volumes(real_batch, fake_batch, normalize_op))
-                    print(fids_local)
 
                     if calc_swds:
                         noise = 1e-7 * np.random.randn()
@@ -441,8 +437,6 @@ def main(args, config):
                         counter = counter + global_size * batch_size
                     else:
                         counter += batch_size
-
-                    print(counter, args.num_metric_samples)
 
                     if counter >= args.num_metric_samples:
                         break
@@ -518,12 +512,17 @@ if __name__ == '__main__':
     parser.add_argument('--fp16_allreduce', default=False, action='store_true')
     parser.add_argument('--calc_metrics', default=False, action='store_true')
     parser.add_argument('--use_ext_clf', default=False, action='store_true')
-    parser.add_argument('--lr_annealing', default=1, type=float, help='generator annealing rate, 1 is no annealing.')
+    parser.add_argument('--g_annealing', default=1,
+                        type=float, help='generator annealing rate, 1 -> no annealing.')
+    parser.add_argument('--d_annealing', default=1,
+                        type=float, help='discriminator annealing rate, 1 -> no annealing.')
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
-    parser.add_argument('--beta2', type=float, default=0.9)
-    parser.add_argument('--lr_scaling', default='none', choices=['linear', 'sqrt', 'none'],
-                        help='How to scale learning rate with horovod size.')
+    parser.add_argument('--beta2', type=float, default=0.99)
+    parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
+                        help='How to scale discriminator learning rate with horovod size.')
+    parser.add_argument('--g_scaling', default='none', choices=['linear', 'sqrt', 'none'],
+                        help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
     args = parser.parse_args()
 
