@@ -159,10 +159,16 @@ def main(args, config):
                 else:
                     raise ValueError(args.d_scaling)
 
-            g_lr = tf.Variable(g_lr, name='g_lr')
-            d_lr = tf.Variable(d_lr, name='d_lr')
-            update_g_lr = g_lr.assign(g_lr * args.g_annealing)
-            update_d_lr = d_lr.assign(d_lr * args.d_annealing)
+            final_g_lr = g_lr.astype(np.float32)
+            final_d_lr = d_lr.astype(np.float32)
+            g_lr_warmup_step = g_lr / args.lr_warmup_epochs
+            d_lr_warmup_step = d_lr / args.lr_warmup_epochs
+            g_lr = tf.Variable(0.0, name='g_lr')  # Start at 0 and warmup.
+            d_lr = tf.Variable(0.0, name='d_lr')
+            warmup_g_lr = g_lr.assign(tf.minimum(final_g_lr, g_lr + g_lr_warmup_step))
+            warmup_d_lr = d_lr.assign(tf.minimum(final_d_lr, d_lr + d_lr_warmup_step))
+            anneal_g_lr = g_lr.assign(g_lr * args.g_annealing)
+            anneal_d_lr = d_lr.assign(d_lr * args.d_annealing)
 
             optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
             optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
@@ -273,6 +279,9 @@ def main(args, config):
                     saver = tf.train.Saver(var_list)
                     saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
+                sess.run(warmup_d_lr)  # Warmup the learning rates.
+                sess.run(warmup_g_lr)  # Warmup the learning rates.
+
                 if args.use_ext_clf:
                     _, _, _, summary, d_loss, g_loss, res_acc, res_loss = sess.run(
                         [train_gen, train_disc, train_resnet, merged_summaries, disc_loss,
@@ -319,8 +328,8 @@ def main(args, config):
                               f"alpha {alpha.eval():.2f}")
 
                 sess.run(update_alpha)
-                sess.run(update_g_lr)
-                sess.run(update_d_lr)
+                sess.run(anneal_d_lr)
+                sess.run(anneal_g_lr)
 
                 if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) \
                         + args.mixing_nimg:
@@ -356,7 +365,8 @@ def main(args, config):
                 local_step += 1
 
                 if verbose:
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]), global_step)
+                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
+                                       global_step)
                     writer.add_summary(summary, global_step)
 
                     if args.use_ext_clf:
@@ -382,8 +392,8 @@ def main(args, config):
                               f"g_loss {g_loss:.4f} \t "
                               f"alpha {alpha.eval():.2f}")
 
-                    sess.run(update_g_lr)
-                    sess.run(update_d_lr)
+                    sess.run(anneal_g_lr)
+                    sess.run(anneal_d_lr)
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
 
@@ -423,8 +433,8 @@ def main(args, config):
                     fake_batch = sess.run(gen_sample_d)
 
                     # [-1, 2] -> [0, 255]
-                    normalize_op = lambda x: np.clip((((x / 3) + 1 / 3) * 255).astype(np.int16),
-                                                     0, 255)
+                    def normalize_op(x):
+                        return np.clip((((x / 3) + 1 / 3) * 255).astype(np.int16), 0, 255)
 
                     fids_local.append(get_fid_for_volumes(real_batch, fake_batch, normalize_op))
 
@@ -473,8 +483,7 @@ def main(args, config):
                                                global_step)
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
                                                                               simple_value=swds[
-                                                                                  -1])]),
-                                               global_step)
+                                                                                  -1])]), global_step)
 
             if verbose:
                 print("\n\n\n End of phase.")
@@ -524,6 +533,7 @@ if __name__ == '__main__':
     parser.add_argument('--g_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
+    parser.add_argument('--lr_warmup_epochs', default=5, type=int)
     args = parser.parse_args()
 
     config = tf.ConfigProto()

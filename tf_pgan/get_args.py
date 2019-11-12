@@ -21,14 +21,14 @@ PARAMS = [
     # ('--fp16_allreduce', ['']),  # Uncomment if you want this.
     ('--calc_metrics', ['']),
     ('--use_ext_clf', ['']),  # Comment to disable
-    # ('--lr_annealing', [1, 0.999, 0.995]),
-    ('--d_annealing', [.999]),
+    ('--g_annealing', [1]),
     ('--g_annealing', [1]),
     ('--num_metric_samples', [128]),
-    ('--beta1', [0, 0.1, 0.5]),
-    ('--beta2', [0.9, .99]),
+    ('--beta1', [0.1]),
+    ('--beta2', [.99]),
     ('--d_scaling', ['sqrt']),
-    ('--g_scaling', ['sqrt'])
+    ('--g_scaling', ['sqrt']),
+    ('--lr_warmup_epochs', [5])
 ]
 
 PARAMS_LISTS = list(PARAMS[i][1] for i in range(len(PARAMS)))
