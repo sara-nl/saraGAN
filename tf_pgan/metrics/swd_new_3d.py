@@ -1,6 +1,7 @@
 import numpy as np
 import scipy.ndimage
 from utils import uniform_box_sampler
+import matplotlib.pyplot as plt
 
 filter_1d = [1, 4, 6, 4, 1]
 f = np.array(filter_1d, dtype=np.float32)
@@ -31,8 +32,9 @@ def finalize_descriptors(desc):
     if isinstance(desc, list):
         desc = np.concatenate(desc, axis=0)
     assert desc.ndim == 5 # (neighborhood, channel, depth, height, width)
-    desc -= np.mean(desc, axis=(0, 2, 3, 4), keepdims=True)
-    desc /= np.std(desc, axis=(0, 2, 3, 4), keepdims=True)
+    if desc.shape[1] > 1:
+        desc -= np.mean(desc, axis=(0, 2, 3, 4), keepdims=True)
+        desc /= np.std(desc, axis=(0, 2, 3, 4), keepdims=True)
     desc = desc.reshape(desc.shape[0], -1)
     return desc
 
@@ -120,25 +122,43 @@ if __name__ == '__main__':
 #----------------------------------------------------------------------------
 
     shape = (128, 1, 32, 128, 128)
-    const_batch = np.full(shape=shape, fill_value=.05).astype(np.float32) + np.random.randn(*shape) * 1e-7
-    rand_batch = np.random.rand(*shape)
-    black_noise = const_batch + np.random.randn(*const_batch.shape) * .1
+    const_batch1 = np.full(shape=shape, fill_value=.05).astype(np.float32)
+    const_batch2 = np.full(shape=shape, fill_value=.05).astype(np.float32)
+    rand_batch1 = np.random.rand(*shape)
+    rand_batch2 = np.random.rand(*shape)
+    black_noise1 = const_batch1 + np.random.randn(*const_batch1.shape) * .01
+    black_noise2 = const_batch1 + np.random.randn(*const_batch1.shape) * .01
+    noise_black_patches1 = rand_batch1.copy()
+    noise_black_patches2 = rand_batch2.copy()
 
-    noise_black_patches = rand_batch.copy()
-    for _ in range(8):
-        arr_slices = uniform_box_sampler(noise_black_patches, min_width=(128, 1, 4, 12, 12), max_width=(128, 1, 8, 32, 32))[0]
-        noise_black_patches[arr_slices] = 0
+    for i in range(shape[0]):
+        for _ in range(16):
+            arr_slices = uniform_box_sampler(noise_black_patches1, min_width=(1, 1, 4, 8, 8,),
+                                             max_width=(1, 1, 8, 16, 16))[0]
+            noise_black_patches1[arr_slices] = 0
 
-    # print("black/black", get_swd_for_volumes(const_batch, const_batch, ))
-    # print("rand/rand", get_swd_for_volumes(rand_batch, rand_batch, ))
-    # print('black/rand', get_swd_for_volumes(const_batch, rand_batch, ))
-    # print('black/black+noise', get_swd_for_volumes(const_batch, black_noise, ))
-    # print('rand/black+noise', get_swd_for_volumes(rand_batch, black_noise, ))
-    # print('rand/rand+blackpatches', get_swd_for_volumes(rand_batch, noise_black_patches, ))
-    # print('black/rand+blackpatches', get_swd_for_volumes(const_batch, noise_black_patches, ))
+    for i in range(shape[0]):
+        for _ in range(16):
+            arr_slices = uniform_box_sampler(noise_black_patches2, min_width=(1, 1, 4, 8, 8,),
+                                             max_width=(1, 1, 8, 16, 16))[0]
+            noise_black_patches2[arr_slices] = 0
 
-    shape = (128, 1, 2, 8, 8)
-    const_batch = np.full(shape=shape, fill_value=.05).astype(np.float32) + np.random.randn(*shape) * 1e-7
-    rand_batch = np.random.rand(*shape)
+    # for i in range(shape[2]):
+    #     img = noise_black_patches1[0, 0, i]
+    #     plt.imshow(img)
+    #     plt.savefig(f'test{i}.png')
+    #     plt.close()
 
-    get_swd_for_volumes(const_batch, rand_batch, nhood_size=(1, 4, 4))
+    print("black/black", get_swd_for_volumes(const_batch1, const_batch2))
+    print("rand/rand", get_swd_for_volumes(rand_batch1, rand_batch2))
+    print("black_noise1/black_noise2", get_swd_for_volumes(black_noise1, black_noise2))
+    print("patches1/patches2", get_swd_for_volumes(noise_black_patches1, noise_black_patches2))
+
+    print('black/rand', get_swd_for_volumes(const_batch1, rand_batch1, ))
+    print('rand/black+noise', get_swd_for_volumes(rand_batch1, black_noise1, ))
+    print('patches/black+noise', get_swd_for_volumes(noise_black_patches1, black_noise1))
+
+    print('rand/rand+blackpatches', get_swd_for_volumes(rand_batch1, noise_black_patches1, ))
+    print('black/black+noise', get_swd_for_volumes(const_batch1, black_noise1, ))
+
+    print('black/rand+blackpatches', get_swd_for_volumes(const_batch1, noise_black_patches1, ))

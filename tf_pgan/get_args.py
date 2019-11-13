@@ -8,11 +8,11 @@ PARAMS = [
     ('--ending_phase', [4]),
     ('--base_dim', [256]),
     ('--latent_dim', [256]),
-    ('--base_batch_size', [4]),  # Uncomment and fill to use.
+    ('--base_batch_size', [64]),  # Uncomment and fill to use.
     ('--mixing_nimg', [2 ** 16]),  # Maybe half these to speed up the search?
     ('--stabilizing_nimg', [2 ** 16]),
     ('--learning_rate', [1e-3]),
-    ('--gp_center', [0]),
+    ('--gp_center', [1]),
     ('--gp_weight', [10]),  # Maybe change to add 20 if computation allows.
     ('--activation', ['leaky_relu']),  # Maybe add swish or leaky celu layer.
     ('--leakiness', [0.3]),
@@ -20,15 +20,15 @@ PARAMS = [
     ('--horovod', ['']),
     # ('--fp16_allreduce', ['']),  # Uncomment if you want this.
     ('--calc_metrics', ['']),
-    ('--use_ext_clf', ['']),  # Comment to disable
+    # ('--use_ext_clf', ['']),  # Comment to disable
     ('--g_annealing', [1]),
-    ('--g_annealing', [1]),
+    ('--d_annealing', [1]),
     ('--num_metric_samples', [128]),
-    ('--beta1', [0.1]),
+    ('--beta1', [0]),
     ('--beta2', [.99]),
     ('--d_scaling', ['sqrt']),
     ('--g_scaling', ['sqrt']),
-    ('--lr_warmup_epochs', [5])
+    # ('--lr_warmup_epochs', [5])
 ]
 
 PARAMS_LISTS = list(PARAMS[i][1] for i in range(len(PARAMS)))

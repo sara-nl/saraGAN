@@ -415,31 +415,43 @@ def test():
     def norm_op(x):
         return (x * 255).astype(np.int16)
 
-    volumes1 = np.random.uniform(0, 1, size=(1, 1, 2, 8, 8))
-    volumes2 = np.random.uniform(0, 1, size=(1, 1, 2, 8, 8))
-    get_fid_for_volumes(volumes1, volumes2, normalize_op=norm_op)
-
     shape = (128, 1, 16, 64, 64)
+    const_batch1 = np.full(shape=shape, fill_value=.05).astype(np.float32)
+    const_batch2 = np.full(shape=shape, fill_value=.05).astype(np.float32)
+    rand_batch1 = np.random.rand(*shape)
+    rand_batch2 = np.random.rand(*shape)
+    black_noise1 = const_batch1 + np.random.randn(*const_batch1.shape) * .01
+    black_noise2 = const_batch1 + np.random.randn(*const_batch1.shape) * .01
+    noise_black_patches1 = rand_batch1.copy()
+    noise_black_patches2 = rand_batch2.copy()
 
-    const_batch = np.full(shape=shape, fill_value=.05).astype(np.float32)
-    rand_batch = np.random.rand(*shape)
-    black_noise = const_batch + np.random.randn(*const_batch.shape) * .01
+    for i in range(shape[0]):
+        for _ in range(16):
+            arr_slices = uniform_box_sampler(noise_black_patches1, min_width=(1, 1, 4, 8, 8,),
+                                             max_width=(1, 1, 8, 16, 16))[0]
+            noise_black_patches1[arr_slices] = 0
 
-    noise_black_patches = rand_batch.copy()
-    for _ in range(8):
-        arr_slices = uniform_box_sampler(noise_black_patches, min_width=(32, 1, 2, 6, 6,),
-                                         max_width=(32, 1, 4, 12, 12))[0]
-        noise_black_patches[arr_slices] = 0
+    for i in range(shape[0]):
+        for _ in range(16):
+            arr_slices = uniform_box_sampler(noise_black_patches2, min_width=(1, 1, 4, 8, 8,),
+                                             max_width=(1, 1, 8, 16, 16))[0]
+            noise_black_patches2[arr_slices] = 0
 
-    print("black/black", get_fid_for_volumes(const_batch, const_batch, normalize_op=norm_op))
-    print("rand/rand", get_fid_for_volumes(rand_batch, rand_batch, normalize_op=norm_op))
-    print('black/rand', get_fid_for_volumes(const_batch, rand_batch, normalize_op=norm_op))
-    print('black/black+noise', get_fid_for_volumes(const_batch, black_noise, normalize_op=norm_op))
-    print('rand/black+noise', get_fid_for_volumes(rand_batch, black_noise, normalize_op=norm_op))
+    # print("black/black", get_fid_for_volumes(const_batch1, const_batch2, normalize_op=norm_op))
+    # print("rand/rand", get_fid_for_volumes(rand_batch1, rand_batch2, normalize_op=norm_op))
+    # print("blacknoise/blacknoise", get_fid_for_volumes(black_noise1, black_noise2, normalize_op=norm_op))
+    # print("blackpatches/blackpatches", get_fid_for_volumes(noise_black_patches1, noise_black_patches2, normalize_op=norm_op))
+
+    # print('black/rand', get_fid_for_volumes(const_batch1, rand_batch1, normalize_op=norm_op))
+    # print('rand/black+noise', get_fid_for_volumes(rand_batch1, black_noise1, normalize_op=norm_op))
+    # print('black+patches/black+noise', get_fid_for_volumes(noise_black_patches1, black_noise1, normalize_op=norm_op))
+
+    # print('black/black+noise', get_fid_for_volumes(const_batch1, black_noise1, normalize_op=norm_op))
     print('rand/rand+blackpatches',
-          get_fid_for_volumes(rand_batch, noise_black_patches, normalize_op=norm_op))
+          get_fid_for_volumes(rand_batch1, noise_black_patches1, normalize_op=norm_op))
+
     print('black/rand+blackpatches',
-          get_fid_for_volumes(const_batch, noise_black_patches, normalize_op=norm_op))
+          get_fid_for_volumes(const_batch1, noise_black_patches1, normalize_op=norm_op))
 
 
 if __name__ == '__main__':

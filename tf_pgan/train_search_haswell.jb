@@ -1,8 +1,8 @@
 #!/bin/bash
 
-#SBATCH -N 32
-#SBATCH -n 32
-#SBATCH -t 2-00:00:00
+#SBATCH -N 1
+#SBATCH -n 1
+#SBATCH -t 5-0:00:00
 #SBATCH -p normal --constraint=haswell
 
 source /home/davidr/tf_cpu.sh
@@ -23,7 +23,7 @@ fi
 ARGS=$(python get_args.py)
 IFS=';' read -ra ADDR <<< "$ARGS"
 
-BASE_COMMAND="mpirun -np 32 --map-by ppr:1:socket:pe=24 python -u main.py"
+BASE_COMMAND="mpirun -np 1 --map-by ppr:1:socket:pe=24 python -u main.py"
 echo "Number of hyperparameter combinations: ${#ADDR[@]}"
 
 for ARG in "${ADDR[@]}"; do

@@ -15,6 +15,7 @@ from utils import count_parameters, image_grid
 from mpi4py import MPI
 
 from tensorflow.data.experimental import AUTOTUNE
+import imageio
 
 
 def main(args, config):
@@ -28,7 +29,7 @@ def main(args, config):
         global_size = 1
 
     timestamp = time.strftime("%Y-%m-%d_%H:%M", time.gmtime())
-    logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', timestamp)
+    logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'generated_samples', timestamp)
 
     if verbose:
         writer = tf.summary.FileWriter(logdir=logdir)
@@ -75,7 +76,6 @@ def main(args, config):
         with tf.variable_scope('alpha'):
             alpha = tf.Variable(1, name='alpha', dtype=tf.float32)
             # Alpha init
-            init_alpha = alpha.assign(1)
 
             # Specify alpha update op for mixing phase.
             num_steps = args.mixing_nimg // (batch_size * global_size)
@@ -85,7 +85,7 @@ def main(args, config):
         zdim_base = max(1, args.final_zdim // (2 ** (num_phases - 1)))
         base_shape = (1, zdim_base, 4, 4)
 
-        noise_input_d = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
+        noise_input_d = tf.placeholder(shape=[tf.shape(real_image_input)[0], args.latent_dim])
         gen_sample_d = generator(noise_input_d, alpha, phase, num_phases,
                                  args.base_dim, base_shape, activation=args.activation, param=args.leakiness)
 
@@ -238,6 +238,8 @@ def main(args, config):
 
             sess.run(tf.global_variables_initializer())
 
+            print(phase, args.starting_phase)
+
             if var_list is not None and phase > args.starting_phase:
                 var_names = [v.name for v in var_list]
                 trainable_variable_names = [v.name for v in tf.trainable_variables()]
@@ -254,252 +256,50 @@ def main(args, config):
                 saver = tf.train.Saver(load_vars)
                 if verbose:
                     print(f"Restoring session with {var_names} variables.")
-                    saver.restore(sess, os.path.join(args.continue_path))
+                    saver.restore(sess, args.continue_path)
 
             var_list = gen_vars + disc_vars
 
             if phase < args.starting_phase:
                 continue
 
-            sess.run(init_alpha)
-            if verbose:
-                print(f"Begin mixing epochs in phase {phase}")
             if args.horovod:
                 sess.run(hvd.broadcast_global_variables(0))
 
-            local_step = 0
-            if args.use_ext_clf:
-                ext_d_accuracies = []
 
-            while True:
+            samples = []
 
-                start = time.time()
-                if local_step % 128 == 0:
-                    if args.horovod:
-                        # Broadcast variables every 128 gradient steps.
-                        sess.run(hvd.broadcast_global_variables(0))
-                    saver = tf.train.Saver(var_list)
-                    if verbose:
-                        saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
+            z_a = np.random.randn(tf.shape(noise_input_d))
+            for _ in range(8):
+                z_b = np.random.randn(tf.shape(noise_input_d))
 
-                # sess.run(warmup_d_lr)  # Warmup the learning rates.
-                # sess.run(warmup_g_lr)  # Warmup the learning rates.
+                linspace = np.linspace(0, 1, 8)
 
-                if args.use_ext_clf:
-                    _, _, _, summary, d_loss, g_loss, res_acc, res_loss = sess.run(
-                        [train_gen, train_disc, train_resnet, merged_summaries, disc_loss,
-                         gen_loss, ext_d_accuracy, ext_d_loss]
+                for p in linspace:
+                    print(p)
+                    z = (1 - p) * z_a + p * z_b
+                    g_sample = sess.run(
+                        gen_sample_d,
+                        feed_dict={noise_input_d: z}
                     )
 
-                else:
-                    _, _, summary, d_loss, g_loss, = sess.run(
-                        [train_gen, train_disc, merged_summaries, disc_loss, gen_loss]
-                     )
+                    samples.append(g_sample)
 
-                end = time.time()
-                img_s = global_size * batch_size / (end - start)
+                z_a = z_b
 
-                global_step += batch_size * global_size
-                local_step += 1
+            def normalize(x, logical_minimum, logical_maximum):
+                x = x.astype(np.float32)
+                x = np.clip(x, logical_minimum, logical_maximum)
+                x = (x - x.min()) / (x.max() - x.min())  # [0, 1]
+                assert x.min() >= 0 and x.max() <= 1
+                x = (x * 256).astype(np.uint8)
+                return x
 
-                if verbose:
-                    writer.add_summary(summary, global_step)
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
-                                       global_step)
+            vid = normalize(np.stack(samples).squeeze(), logical_maximum=-1024, logical_maximum=2048)
+            imageio.mimwrite('videos/latent_space.avi', vid, fps=15)
 
-                    if args.use_ext_clf:
-                        ext_d_accuracies.append(res_acc)
-                        ext_d_accuracies = ext_d_accuracies[-256:]
-                        mean_d_accuracy = np.mean(ext_d_accuracies)
-                        writer.add_summary(tf.Summary(
-                            value=[tf.Summary.Value(tag='ext_d_accuracy',
-                                                    simple_value=mean_d_accuracy)]),
-                            global_step)
+            break
 
-                        print(f"Step {global_step:09} \t"
-                              f"img/s {img_s:.2f} \t "
-                              f"d_loss {d_loss:.4f} \t "
-                              f"g_loss {g_loss:.4f} \t "
-                              f"ext_d_accuracy {mean_d_accuracy:.4f} \t "
-                              f"ext_d_loss {res_loss:.4f} \t "
-                              f"alpha {alpha.eval():.2f}")
-                    else:
-                        print(f"Step {global_step:09} \t"
-                              f"img/s {img_s:.2f} \t "
-                              f"d_loss {d_loss:.4f} \t "
-                              f"g_loss {g_loss:.4f} \t "
-                              f"alpha {alpha.eval():.2f}")
-
-                sess.run(update_alpha)
-                sess.run(anneal_d_lr)
-                sess.run(anneal_g_lr)
-
-                if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) \
-                        + args.mixing_nimg:
-                    break
-
-                assert alpha.eval() >= 0
-
-            if verbose:
-                print(f"Begin stabilizing epochs in phase {phase}")
-
-            sess.run(alpha.assign(0))
-            while True:
-                start = time.time()
-                assert alpha.eval() == 0
-                # Broadcast variables every 128 gradient steps.
-                if local_step % 128 == 0:
-                    if args.horovod:
-                        sess.run(hvd.broadcast_global_variables(0))
-                    saver = tf.train.Saver(var_list)
-                    if verbose:
-                        saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
-
-                if args.use_ext_clf:
-                    _, _, _, summary, d_loss, g_loss, res_acc = sess.run(
-                        [train_gen, train_disc, train_resnet, merged_summaries, disc_loss,
-                         gen_loss, ext_d_accuracy],)
-                else:
-                    _, _,  summary, d_loss, g_loss = sess.run(
-                         [train_gen, train_disc,  merged_summaries, disc_loss, gen_loss])
-
-                end = time.time()
-                img_s = global_size * batch_size / (end - start)
-                global_step += batch_size * global_size
-                local_step += 1
-
-                if verbose:
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
-                                       global_step)
-                    writer.add_summary(summary, global_step)
-
-                    if args.use_ext_clf:
-                        ext_d_accuracies.append(res_acc)
-                        ext_d_accuracies = ext_d_accuracies[-256:]
-                        mean_d_accuracy = np.mean(ext_d_accuracies)
-                        writer.add_summary(tf.Summary(
-                            value=[tf.Summary.Value(tag='ext_d_accuracy',
-                                                    simple_value=mean_d_accuracy)]),
-                            global_step)
-
-                        print(f"Step {global_step:09} \t"
-                              f"img/s {img_s:.2f} \t "
-                              f"d_loss {d_loss:.4f} \t "
-                              f"g_loss {g_loss:.4f} \t "
-                              f"ext_d_accuracy {mean_d_accuracy:.4f} \t "
-                              f"ext_d_loss {res_loss:.4f} \t "
-                              f"alpha {alpha.eval():.2f}")
-                    else:
-                        print(f"Step {global_step:09} \t"
-                              f"img/s {img_s:.2f} \t "
-                              f"d_loss {d_loss:.4f} \t "
-                              f"g_loss {g_loss:.4f} \t "
-                              f"alpha {alpha.eval():.2f}")
-
-                    sess.run(anneal_g_lr)
-                    sess.run(anneal_d_lr)
-
-                if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
-
-                    # if verbose:
-                    #     run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                    #     run_metadata = tf.RunMetadata()
-
-                    #     if args.use_ext_clf:
-                    #         sess.run(
-                    #             [train_gen, train_disc, train_resnet, merged_summaries, disc_loss, gen_loss, ext_d_accuracy],
-                    #             options=run_options,
-                    #             run_metadata=run_metadata)
-                    #     else:
-                    #         sess.run(
-                    #             [train_gen, train_disc, merged_summaries, disc_loss, gen_loss],
-                    #             options=run_options,
-                    #             run_metadata=run_metadata)
-
-                    #     writer.add_run_metadata(run_metadata, 'step%d' % global_step)
-
-                    break
-
-            # Calculate metrics.
-            calc_swds: bool = size >= 16
-
-            if args.calc_metrics:
-                fids_local = []
-                swds_local = []
-                counter = 0
-                while True:
-                    if args.horovod:
-                        start_loc = counter + hvd.rank() * batch_size
-                    else:
-                        start_loc = 0
-                    real_batch = np.stack([npy_data[i] for i in range(start_loc, start_loc + batch_size)])
-                    real_batch = real_batch / 1024 - 1
-                    fake_batch = sess.run(gen_sample_d)
-
-                    # [-1, 2] -> [0, 255]
-                    def normalize_op(x):
-                        return np.clip((((x / 3) + 1 / 3) * 255).astype(np.int16), 0, 255)
-
-                    fids_local.append(get_fid_for_volumes(real_batch, fake_batch, normalize_op))
-
-                    if calc_swds:
-                        swds = get_swd_for_volumes(real_batch, fake_batch)
-                        swds_local.append(swds)
-
-                    if args.horovod:
-                        counter = counter + global_size * batch_size
-                    else:
-                        counter += batch_size
-
-                    if counter >= args.num_metric_samples:
-                        break
-
-                fid_local = np.mean(fids_local)
-                if args.horovod:
-                    fid = MPI.COMM_WORLD.allreduce(fid_local, op=MPI.SUM) / hvd.size()
-                else:
-                    fid = fid_local
-
-                # swds_local explanation: list of laplacian polytope: (16x16, 32x32, 64x64..., MEAN)
-                if calc_swds:
-                    swds_local = np.array(swds_local)
-                    # Average over batches
-                    swds_local = swds_local.mean(axis=0)
-                    if args.horovod:
-                        swds = MPI.COMM_WORLD.allreduce(swds_local, op=MPI.SUM) / hvd.size()
-                    else:
-                        swds = swds_local
-
-                if verbose:
-                    print(f"FID: {fid:.4f}")
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='fid',
-                                                                          simple_value=fid)]),
-                                       global_step)
-
-                    if calc_swds:
-                        print(f"SWDS: {swds}")
-                        for i in range(len(swds))[:-1]:
-                            lod = 16 * 2 ** i
-                            writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_{lod}',
-                                                                                  simple_value=swds[
-                                                                                      i])]),
-                                               global_step)
-                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
-                                                                              simple_value=swds[
-                                                                                  -1])]), global_step)
-
-            if verbose:
-                print("\n\n\n End of phase.")
-
-                # Save Session.
-                # var_list = tf.trainable_variables()
-                saver = tf.train.Saver(var_list)
-                saver.save(sess, os.path.join(logdir, f'model_{phase}'))
-
-            if args.ending_phase:
-                if phase == args.ending_phase:
-                    print("Reached final phase, breaking.")
-                    break
 
 
 if __name__ == '__main__':
@@ -507,6 +307,7 @@ if __name__ == '__main__':
     parser.add_argument('dataset_path', type=str)
     parser.add_argument('final_resolution', type=int)
     parser.add_argument('final_zdim', type=int)
+    parser.add_argument('num_samples', type=int)
     parser.add_argument('--starting_phase', type=int, default=1)
     parser.add_argument('--ending_phase', type=int, default=None)
     parser.add_argument('--base_dim', type=int, default=256)
