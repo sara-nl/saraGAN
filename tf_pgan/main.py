@@ -320,23 +320,13 @@ def main(args, config):
                     # sess.run(anneal_d_lr)
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
-
-                    # if verbose:
-                    #     run_options = tf.RunOptions(trace_level=tf.RunOptions.FULL_TRACE)
-                    #     run_metadata = tf.RunMetadata()
-
-                    #     if args.use_ext_clf:
-                    #         sess.run(
-                    #             [train_gen, train_disc, train_resnet, merged_summaries, disc_loss, gen_loss, ext_d_accuracy],
-                    #             options=run_options,
-                    #             run_metadata=run_metadata)
-                    #     else:
-                    #         sess.run(
-                    #             [train_gen, train_disc, merged_summaries, disc_loss, gen_loss],
-                    #             options=run_options,
-                    #             run_metadata=run_metadata)
-
-                    #     writer.add_run_metadata(run_metadata, 'step%d' % global_step)
+                    if verbose:
+                        run_metadata = tf.RunMetadata()
+                        opts = tf.profiler.ProfileOptionBuilder.float_operation()
+                        g = tf.get_default_graph()
+                        flops = tf.profiler.profile(g, run_meta=run_metadata, cmd='op', options=opts)
+                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='graph_flops', simple_value=flops.total_float_ops)]),
+                                           global_step)
 
                     break
 
