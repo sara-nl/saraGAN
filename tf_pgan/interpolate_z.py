@@ -8,6 +8,7 @@ import random
 from resnet import resnet
 from metrics.fid import get_fid_for_volumes
 from metrics.swd_new_3d import get_swd_for_volumes
+from tqdm import tqdm
 
 from dataset import NumpyDataset
 from network import discriminator, generator
@@ -271,13 +272,12 @@ def main(args, config):
             samples = []
 
             z_a = np.random.randn(*noise_input_d.get_shape().as_list())
-            for _ in range(args.num_samples):
+            for _ in tqdm(range(args.num_samples)):
                 z_b = np.random.randn(*noise_input_d.get_shape().as_list())
 
                 linspace = np.linspace(0, 1, 8)
 
                 for p in linspace:
-                    print(p)
                     z = (1 - p) * z_a + p * z_b
                     grid = sess.run(
                         fake_image_grid,
@@ -297,12 +297,10 @@ def main(args, config):
                 return x
 
             vid = normalize(np.stack(samples).squeeze(), logical_minimum=-1, logical_maximum=2)
-            print(vid.shape)
-            np.save('latent_space.npy', vid)
-            imageio.mimwrite('videos/latent_space.avi', vid, fps=15)
+            np.save('videos/latent_space.npy', vid)
+            imageio.mimwrite('videos/latent_space.mp4', vid, fps=15)
 
             break
-
 
 
 if __name__ == '__main__':
