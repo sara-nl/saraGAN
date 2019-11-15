@@ -8,7 +8,7 @@ PARAMS = [
     ('--ending_phase', [4]),
     ('--base_dim', [256]),
     ('--latent_dim', [256]),
-    ('--base_batch_size', [64]),  # Uncomment and fill to use.
+    ('--base_batch_size', [4]),  # Uncomment and fill to use.
     ('--mixing_nimg', [2 ** 16]),  # Maybe half these to speed up the search?
     ('--stabilizing_nimg', [2 ** 16]),
     ('--learning_rate', [1e-3]),

@@ -13,8 +13,8 @@ from dataset import NumpyDataset
 from network import discriminator, generator
 from utils import count_parameters, image_grid
 from mpi4py import MPI
-
 from tensorflow.data.experimental import AUTOTUNE
+
 import imageio
 
 
@@ -85,7 +85,7 @@ def main(args, config):
         zdim_base = max(1, args.final_zdim // (2 ** (num_phases - 1)))
         base_shape = (1, zdim_base, 4, 4)
 
-        noise_input_d = tf.placeholder(shape=[tf.shape(real_image_input)[0], args.latent_dim])
+        noise_input_d = tf.placeholder(shape=[real_image_input.shape[0], args.latent_dim], dtype=tf.float32)
         gen_sample_d = generator(noise_input_d, alpha, phase, num_phases,
                                  args.base_dim, base_shape, activation=args.activation, param=args.leakiness)
 
@@ -250,6 +250,7 @@ def main(args, config):
                     saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
 
             elif var_list is not None and args.continue_path and phase == args.starting_phase:
+                var_list = gen_vars + disc_vars
                 var_names = [v.name for v in var_list]
                 trainable_variable_names = [v.name for v in tf.trainable_variables()]
                 load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
@@ -269,21 +270,21 @@ def main(args, config):
 
             samples = []
 
-            z_a = np.random.randn(tf.shape(noise_input_d))
-            for _ in range(8):
-                z_b = np.random.randn(tf.shape(noise_input_d))
+            z_a = np.random.randn(*noise_input_d.get_shape().as_list())
+            for _ in range(args.num_samples):
+                z_b = np.random.randn(*noise_input_d.get_shape().as_list())
 
                 linspace = np.linspace(0, 1, 8)
 
                 for p in linspace:
                     print(p)
                     z = (1 - p) * z_a + p * z_b
-                    g_sample = sess.run(
-                        gen_sample_d,
+                    grid = sess.run(
+                        fake_image_grid,
                         feed_dict={noise_input_d: z}
                     )
 
-                    samples.append(g_sample)
+                    samples.append(np.squeeze(grid))
 
                 z_a = z_b
 
@@ -292,10 +293,12 @@ def main(args, config):
                 x = np.clip(x, logical_minimum, logical_maximum)
                 x = (x - x.min()) / (x.max() - x.min())  # [0, 1]
                 assert x.min() >= 0 and x.max() <= 1
-                x = (x * 256).astype(np.uint8)
+                x = (x * 255).astype(np.uint8)
                 return x
 
-            vid = normalize(np.stack(samples).squeeze(), logical_maximum=-1024, logical_maximum=2048)
+            vid = normalize(np.stack(samples).squeeze(), logical_minimum=-1, logical_maximum=2)
+            print(vid.shape)
+            np.save('latent_space.npy', vid)
             imageio.mimwrite('videos/latent_space.avi', vid, fps=15)
 
             break

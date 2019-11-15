@@ -6,8 +6,11 @@ import horovod.tensorflow as hvd
 import time
 import random
 from resnet import resnet
+import imageio
+import matplotlib.pyplot as plt
 from metrics.fid import get_fid_for_volumes
 from metrics.swd_new_3d import get_swd_for_volumes
+import matplotlib.pyplot as plt
 
 from dataset import NumpyDataset
 from network import discriminator, generator
@@ -15,6 +18,7 @@ from utils import count_parameters, image_grid
 from mpi4py import MPI
 
 from tensorflow.data.experimental import AUTOTUNE
+from tqdm import tqdm
 
 
 def main(args, config):
@@ -73,13 +77,7 @@ def main(args, config):
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         with tf.variable_scope('alpha'):
-            alpha = tf.Variable(1, name='alpha', dtype=tf.float32)
-            # Alpha init
-
-            # Specify alpha update op for mixing phase.
-            num_steps = args.mixing_nimg // (batch_size * global_size)
-            alpha_update = 1 / num_steps
-            update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
+            alpha = tf.Variable(0, name='alpha', dtype=tf.float32)
 
         zdim_base = max(1, args.final_zdim // (2 ** (num_phases - 1)))
         base_shape = (1, zdim_base, 4, 4)
@@ -249,6 +247,7 @@ def main(args, config):
                     saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
 
             elif var_list is not None and args.continue_path and phase == args.starting_phase:
+                var_list = gen_vars + disc_vars
                 var_names = [v.name for v in var_list]
                 trainable_variable_names = [v.name for v in tf.trainable_variables()]
                 load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
@@ -265,12 +264,18 @@ def main(args, config):
             if args.horovod:
                 sess.run(hvd.broadcast_global_variables(0))
 
-            for i in range(args.num_samples):
-                g_sample = sess.run(
-                     gen_sample_d
+            for i in tqdm(range(args.num_samples)):
+                assert alpha.eval() == 0
+                g_sample, grid = sess.run(
+                     [gen_sample_d, fake_image_grid]
                 )
 
+                grid = np.squeeze(grid)
+                imageio.imwrite(os.path.join(logdir, f'grid_{i}.png'), grid)
+
                 g_sample = g_sample.squeeze()
+
+                print(g_sample.min(), g_sample.max())
                 save_path = os.path.join(logdir, f'{i}.npy')
                 np.save(save_path, g_sample)
 
