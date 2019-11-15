@@ -268,11 +268,17 @@ def main(args, config):
             if args.horovod:
                 sess.run(hvd.broadcast_global_variables(0))
 
-
-            samples = []
+            def normalize(x, logical_minimum, logical_maximum):
+                x = x.astype(np.float32)
+                x = np.clip(x, logical_minimum, logical_maximum)
+                x = (x - x.min()) / (x.max() - x.min())  # [0, 1]
+                assert x.min() >= 0 and x.max() <= 1
+                x = (x * 255).astype(np.uint8)
+                return x
 
             z_a = np.random.randn(*noise_input_d.get_shape().as_list())
             for i in tqdm(range(args.num_samples)):
+                samples = []
                 z_b = np.random.randn(*noise_input_d.get_shape().as_list())
 
                 linspace = np.linspace(0, 1, 8)
@@ -286,19 +292,9 @@ def main(args, config):
 
                     samples.append(np.squeeze(grid))
 
+                vid = normalize(np.stack(samples).squeeze(), logical_minimum=-1, logical_maximum=2)
+                np.save(f'interpolates/{i:03}.npy', vid)
                 z_a = z_b
-
-            def normalize(x, logical_minimum, logical_maximum):
-                x = x.astype(np.float32)
-                x = np.clip(x, logical_minimum, logical_maximum)
-                x = (x - x.min()) / (x.max() - x.min())  # [0, 1]
-                assert x.min() >= 0 and x.max() <= 1
-                x = (x * 255).astype(np.uint8)
-                return x
-
-            vid = normalize(np.stack(samples).squeeze(), logical_minimum=-1, logical_maximum=2)
-            np.save(f'interpolates/{i:03}.npy', vid)
-            # imageio.mimwrite('videos/latent_space.mp4', vid, fps=15)
 
 
 if __name__ == '__main__':
