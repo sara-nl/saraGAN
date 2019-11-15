@@ -272,7 +272,7 @@ def main(args, config):
             samples = []
 
             z_a = np.random.randn(*noise_input_d.get_shape().as_list())
-            for _ in tqdm(range(args.num_samples)):
+            for i in tqdm(range(args.num_samples)):
                 z_b = np.random.randn(*noise_input_d.get_shape().as_list())
 
                 linspace = np.linspace(0, 1, 8)
@@ -297,10 +297,8 @@ def main(args, config):
                 return x
 
             vid = normalize(np.stack(samples).squeeze(), logical_minimum=-1, logical_maximum=2)
-            np.save('videos/latent_space.npy', vid)
-            imageio.mimwrite('videos/latent_space.mp4', vid, fps=15)
-
-            break
+            np.save(f'interpolates/{i:03}.npy', vid)
+            # imageio.mimwrite('videos/latent_space.mp4', vid, fps=15)
 
 
 if __name__ == '__main__':
