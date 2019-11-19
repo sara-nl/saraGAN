@@ -1,13 +1,14 @@
-from ops import *
+from networks.ops import *
 
 
 def generator_in(d_z, noise_inputs, base_dim, base_shape, activation, param=None):
 
     with tf.variable_scope('constant_in'):
         x = tf.get_variable('input_constant',
-                            shape=[d_z.get_shape().as_list()[0], base_dim, *base_shape[1:]],
+                            shape=[1, base_dim, *base_shape[1:]],
                             initializer=tf.initializers.ones())
 
+        x = tf.tile(x, [tf.shape(d_z)[0], 1, 1, 1, 1])
         x = apply_noise(x, noise_inputs[0], randomize_noise=True)
         x = apply_bias(x)
         x = act(x, activation, param)
@@ -58,7 +59,7 @@ def g_synthesis(d_z,
 
     noise_inputs = list()
     for layer_idx in range(1, phase + 1):
-        shape = list(base_shape[:1]) + list(np.array(base_shape[1:]) * 2 ** (layer_idx - 1))
+        shape = [1, 1] + list(np.array(base_shape[1:]) * 2 ** (layer_idx - 1))
         noise_inputs.append(tf.get_variable(f'noise_input_{layer_idx}', shape=shape,
                                             initializer=tf.initializers.random_normal(), trainable=False))
 

@@ -1,4 +1,4 @@
-from ops import *
+from networks.ops import *
 
 
 def g_mapping(
@@ -15,12 +15,16 @@ def g_mapping(
             scope.reuse_variables()
         # normalize latents
         x = z * tf.rsqrt(tf.reduce_mean(tf.square(z), axis=1, keepdims=True) + 1e-8)
+        # x = tf.Print(x, [tf.reduce_mean(x), tf.reduce_min(x), tf.reduce_max(x)], message='mean '
+        #                                                                                  'min max')
 
         # Mapping layers.
         fmaps = z.get_shape().as_list()[1]
         for layer_idx in range(mapping_layers):
             with tf.variable_scope(f'dense_{layer_idx}'):
                 x = dense(x, fmaps=fmaps, activation=activation, lrmul=mapping_lrmul, param=act_param)
+                # x = tf.Print(x, [tf.reduce_mean(x), tf.reduce_min(x), tf.reduce_max(x)],
+                #              message='mean min max')
                 x = apply_bias(x)
                 x = act(x, activation, param=act_param)
 
@@ -40,8 +44,9 @@ if __name__ == '__main__':
 
         sess.run(tf.global_variables_initializer())
         disentangled_latents = sess.run(dlatents)
-        print(disentangled_latents.shape)
+        print(disentangled_latents.shape, disentangled_latents.min(), disentangled_latents.max())
 
         print('Total synthesis generator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('g_mapping')))
+
 

@@ -1,4 +1,4 @@
-from ops import *
+from networks.ops import *
 
 
 def discriminator_block(x, filters_in, filters_out, activation, param=None):

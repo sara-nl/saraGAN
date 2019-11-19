@@ -16,3 +16,4 @@ results/*
 results/
 dataset/
 interpolates/
+core.*

@@ -6,19 +6,17 @@ import horovod.tensorflow as hvd
 import time
 import random
 from resnet import resnet
-import imageio
-import matplotlib.pyplot as plt
 from metrics.fid import get_fid_for_volumes
 from metrics.swd_new_3d import get_swd_for_volumes
-import matplotlib.pyplot as plt
+from tqdm import tqdm
 
 from dataset import NumpyDataset
-from network_pgan import discriminator, generator
+from network import discriminator, generator
 from utils import count_parameters, image_grid
 from mpi4py import MPI
-
 from tensorflow.data.experimental import AUTOTUNE
-from tqdm import tqdm
+
+import imageio
 
 
 def main(args, config):
@@ -77,12 +75,18 @@ def main(args, config):
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         with tf.variable_scope('alpha'):
-            alpha = tf.Variable(0, name='alpha', dtype=tf.float32)
+            alpha = tf.Variable(1, name='alpha', dtype=tf.float32)
+            # Alpha init
+
+            # Specify alpha update op for mixing phase.
+            num_steps = args.mixing_nimg // (batch_size * global_size)
+            alpha_update = 1 / num_steps
+            update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
 
         zdim_base = max(1, args.final_zdim // (2 ** (num_phases - 1)))
         base_shape = (1, zdim_base, 4, 4)
 
-        noise_input_d = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
+        noise_input_d = tf.placeholder(shape=[real_image_input.shape[0], args.latent_dim], dtype=tf.float32)
         gen_sample_d = generator(noise_input_d, alpha, phase, num_phases,
                                  args.base_dim, base_shape, activation=args.activation, param=args.leakiness)
 
@@ -264,21 +268,33 @@ def main(args, config):
             if args.horovod:
                 sess.run(hvd.broadcast_global_variables(0))
 
+            def normalize(x, logical_minimum, logical_maximum):
+                x = x.astype(np.float32)
+                x = np.clip(x, logical_minimum, logical_maximum)
+                x = (x - x.min()) / (x.max() - x.min())  # [0, 1]
+                assert x.min() >= 0 and x.max() <= 1
+                x = (x * 255).astype(np.uint8)
+                return x
+
+            z_a = np.random.randn(*noise_input_d.get_shape().as_list())
             for i in tqdm(range(args.num_samples)):
-                assert alpha.eval() == 0
-                g_sample, grid = sess.run(
-                     [gen_sample_d, fake_image_grid]
-                )
+                samples = []
+                z_b = np.random.randn(*noise_input_d.get_shape().as_list())
 
-                grid = np.squeeze(grid)
-                imageio.imwrite(os.path.join(logdir, f'grid_{i}.png'), grid)
+                linspace = np.linspace(0, 1, 8)
 
-                g_sample = g_sample.squeeze()
+                for p in linspace:
+                    z = (1 - p) * z_a + p * z_b
+                    grid = sess.run(
+                        fake_image_grid,
+                        feed_dict={noise_input_d: z}
+                    )
 
-                save_path = os.path.join(logdir, f'{i}.npy')
-                np.save(save_path, g_sample)
+                    samples.append(np.squeeze(grid))
 
-            break
+                vid = normalize(np.stack(samples).squeeze(), logical_minimum=-1, logical_maximum=2)
+                np.save(f'interpolates/{i:03}.npy', vid)
+                z_a = z_b
 
 
 if __name__ == '__main__':

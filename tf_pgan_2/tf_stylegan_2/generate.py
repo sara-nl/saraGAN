@@ -13,7 +13,7 @@ from metrics.swd_new_3d import get_swd_for_volumes
 import matplotlib.pyplot as plt
 
 from dataset import NumpyDataset
-from network_pgan import discriminator, generator
+from network import discriminator, generator
 from utils import count_parameters, image_grid
 from mpi4py import MPI
 
@@ -275,6 +275,7 @@ def main(args, config):
 
                 g_sample = g_sample.squeeze()
 
+                print(g_sample.min(), g_sample.max())
                 save_path = os.path.join(logdir, f'{i}.npy')
                 np.save(save_path, g_sample)
 

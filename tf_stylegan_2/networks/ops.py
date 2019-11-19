@@ -2,15 +2,7 @@ import tensorflow as tf
 import numpy as np
 
 
-def num_filters(phase, num_phases, base_dim, min_filters=32):
-    num_downscales = int(np.log2(base_dim / min_filters))
-    filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
-    print(filters)
-    return filters
-
-
 def calculate_gain(activation, param=None):
-
     linear_fns = ['linear', 'conv1d', 'conv2d', 'conv3d', 'conv_transpose1d', 'conv_transpose2d', 'conv_transpose3d']
     if activation in linear_fns or activation == 'sigmoid':
         return 1
@@ -40,8 +32,8 @@ def get_weight(shape, activation, lrmul=1, param=None):
                            initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef
 
 
-def apply_bias(x, lrmul=1):
-    b = tf.get_variable('bias', shape=[x.shape[1]], initializer=tf.initializers.zeros()) * lrmul
+def apply_bias(x):
+    b = tf.get_variable('bias', shape=[x.shape[1]], initializer=tf.initializers.zeros())
     b = tf.cast(b, x.dtype)
     if len(x.shape) == 2:
         return x + b
@@ -85,36 +77,21 @@ def act(x, activation, param=None):
     return x
 
 
-def pixel_norm(x, epsilon=1e-8):
-    with tf.variable_scope('pixel_norm'):
-        return x * tf.rsqrt(tf.reduce_mean(tf.square(x), axis=1, keepdims=True) + epsilon)
+def num_filters(phase, num_phases, base_dim):
+    num_downscales = int(np.log2(base_dim / 32))
+    filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
+    return filters
 
 
-def instance_norm(x, epsilon=1e-8):
-    assert len(x.shape) == 5  # NCDHW
-    with tf.variable_scope('instance_norm'):
-        x -= tf.reduce_mean(x, axis=[2, 3, 4], keepdims=True)
-        epsilon = tf.constant(epsilon, dtype=x.dtype, name='epsilon')
-        x *= tf.rsqrt(tf.reduce_mean(tf.square(x), axis=[2, 3, 4], keepdims=True) + epsilon)
-        return x
+def to_rgb(x, channels=1):
+    return apply_bias(conv3d(x, channels, 1, activation='linear'))
 
 
-def apply_noise(x, noise_var=None, randomize_noise=True):
-    assert len(x.shape) == 5  # NCDHW
-    with tf.variable_scope('apply_noise'):
-        if noise_var is None or randomize_noise:
-            noise = tf.random_normal([tf.shape(x)[0], 1, x.shape[2], x.shape[3], x.shape[4]])
-        else:
-            noise = noise_var
-        weight = tf.get_variable('weight', shape=[x.shape[1].value], initializer=tf.initializers.zeros())
-        return x + noise * tf.reshape(weight, [1, -1, 1, 1, 1])
-
-
-def style_mod(x, dlatent, activation, param=None):
-    with tf.variable_scope('style_mod'):
-        style = apply_bias(dense(dlatent, fmaps=x.shape[1] * 2, activation=activation, param=param))
-        style = tf.reshape(style, [-1, 2, x.shape[1]] + [1] * (len(x.shape) - 2))
-        return x * (style[:, 0] + 1) + style[:, 1]
+def from_rgb(x, filters_out, activation, param=None):
+    x = conv3d(x, filters_out, 1, activation, param)
+    x = apply_bias(x)
+    x = act(x, activation, param=param)
+    return x
 
 
 def avg_unpool3d(x, factor=2, gain=1):
@@ -170,15 +147,9 @@ def downscale3d(x, factor=2):
         return func(x)
 
 
-def to_rgb(x, channels=1):
-    return apply_bias(conv3d(x, channels, 1, activation='linear'))
-
-
-def from_rgb(x, filters_out, activation, param=None):
-    x = conv3d(x, filters_out, 1, activation, param)
-    x = apply_bias(x)
-    x = act(x, activation, param)
-    return x
+# def pixel_norm(x, epsilon=1e-8):
+#     with tf.variable_scope('pixel_norm'):
+#         return x * tf.rsqrt(tf.reduce_mean(tf.square(x), axis=1, keepdims=True) + epsilon)
 
 
 def minibatch_stddev_layer(x, group_size=4):
@@ -196,19 +167,28 @@ def minibatch_stddev_layer(x, group_size=4):
         return tf.concat([x, y], axis=1)
 
 
-# def layer_epilogue(x, dlatents_in, noise_inputs, layer_idx, activation, param):
-#     x = apply_noise(x, noise_inputs[layer_idx - 2], randomize_noise=True)
-#     x = apply_bias(x)
-#     x = act(x, activation, param)
-#     x = instance_norm(x)
-#     x = style_mod(x, dlatents_in[:, layer_idx - 2])
-#     return x
+def instance_norm(x, epsilon=1e-8):
+    assert len(x.shape) == 5  # NCDHW
+    with tf.variable_scope('instance_norm'):
+        x -= tf.reduce_mean(x, axis=[2, 3, 4], keepdims=True)
+        epsilon = tf.constant(epsilon, dtype=x.dtype, name='epsilon')
+        x *= tf.rsqrt(tf.reduce_mean(tf.square(x), axis=[2, 3, 4], keepdims=True) + epsilon)
+        return x
+
+def apply_noise(x, noise_var=None, randomize_noise=True):
+    assert len(x.shape) == 5  # NCDHW
+    with tf.variable_scope('apply_noise'):
+        if noise_var is None or randomize_noise:
+            noise = tf.random_normal([tf.shape(x)[0], 1, x.shape[2], x.shape[3], x.shape[4]])
+        else:
+            noise = noise_var
+        weight = tf.get_variable('weight', shape=[x.shape[1].value], initializer=tf.initializers.zeros())
+        return x + noise * tf.reshape(weight, [1, -1, 1, 1, 1])
 
 
-if __name__ == '__main__':
-    num_phases = 8
-    for phase in range(1, num_phases + 1):
-        nf = num_filters(phase, num_phases, base_dim=256)
-
-        print(f'res: {2 * 2 ** phase}, nf: {nf}')
+def style_mod(x, dlatent, activation, param=None):
+    with tf.variable_scope('style_mod'):
+        style = apply_bias(dense(dlatent, fmaps=x.shape[1] * 2, activation=activation, param=param))
+        style = tf.reshape(style, [-1, 2, x.shape[1]] + [1] * (len(x.shape) - 2))
+        return x * (style[:, 0] + 1) + style[:, 1]
 

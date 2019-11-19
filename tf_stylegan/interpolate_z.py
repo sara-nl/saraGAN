@@ -11,7 +11,7 @@ from metrics.swd_new_3d import get_swd_for_volumes
 from tqdm import tqdm
 
 from dataset import NumpyDataset
-from network import discriminator, generator
+from network_pgan import discriminator, generator
 from utils import count_parameters, image_grid
 from mpi4py import MPI
 from tensorflow.data.experimental import AUTOTUNE

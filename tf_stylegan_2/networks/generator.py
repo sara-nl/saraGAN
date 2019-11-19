@@ -1,15 +1,19 @@
 import tensorflow as tf
 import numpy as np
 
-from g_mapping import g_mapping
-from g_synthesis import g_synthesis
+from networks.g_mapping import g_mapping
+from networks.g_synthesis import g_synthesis
 
 
 def generator(z, alpha, phase, num_phases, base_dim, base_shape, activation, is_training,
-              param=None, psi=0.7, truncation_layers=8, beta=0.995, style_mixing_prob=0.9):
+              param=None, psi=0.7, truncation_layers=8, beta=0.995, style_mixing_prob=0.9,
+              is_reuse=False):
 
-    with tf.variable_scope('generator'):
-        d_z_avg = tf.get_variable('d_z_avg', shape=z.get_shape().as_list()[1], trainable=False)
+    with tf.variable_scope('generator') as scope:
+        if is_reuse:
+            scope.reuse_variables()
+
+        d_z_avg = tf.get_variable('d_z_avg', shape=z.get_shape().as_list()[1], trainable=True)
 
         d_z = g_mapping(z, phase)
 
@@ -21,7 +25,7 @@ def generator(z, alpha, phase, num_phases, base_dim, base_shape, activation, is_
                     d_z = tf.identity(d_z)
 
         # Style regularization. Requires more compute as we need two mapping passes.
-        if is_training:
+        if is_training and phase > 1:
             z_reg = tf.random_normal(tf.shape(z))
             d_z_reg = g_mapping(z_reg, phase, is_reuse=True)
 
@@ -55,7 +59,7 @@ if __name__ == '__main__':
     activation = 'leaky_relu'
     param = 0.2
 
-    for phase in range(1, num_phases + 1):
+    for phase in range(1, 4):
         tf.reset_default_graph()
 
         z = tf.random.normal(shape=(1, z_dim))
@@ -67,6 +71,11 @@ if __name__ == '__main__':
               sum(np.product(p.shape) for p in tf.trainable_variables('generator')))
 
         print('Output shape:', img_out.shape)
+
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            img_out = sess.run(img_out)
+            print(img_out.min(), img_out.max(), img_out.shape)
 
 
 

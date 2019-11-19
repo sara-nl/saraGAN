@@ -33,6 +33,7 @@ def main(args, config):
         print("Arguments passed:")
         print(args)
         print(f"Saving files to {logdir}")
+
     else:
         writer = None
 
@@ -55,8 +56,7 @@ def main(args, config):
         # Get DataLoader
         batch_size = min(args.max_batch_size,
                          max(1, args.max_batch_size // (phase * global_size)))
-
-        assert batch_size * global_size <= args.max_batch_size
+        assert batch_size * global_size <= 128
 
         if args.horovod:
             dataset.shard(hvd.size(), hvd.rank())
@@ -74,7 +74,7 @@ def main(args, config):
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         with tf.variable_scope('alpha'):
-            alpha = tf.Variable(1, name='alpha', dtype=tf.float32, trainable=False)
+            alpha = tf.Variable(1, name='alpha', dtype=tf.float32)
             # Alpha init
             init_alpha = alpha.assign(1)
 
@@ -84,34 +84,23 @@ def main(args, config):
             update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
 
         zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
-        base_shape = (final_shape[0], zdim_base, 4, 4)
+        base_shape = (1, zdim_base, 4, 4)
 
-        # Generator training.
-        z_g = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
-        gen_sample_g = generator(z_g, alpha, phase, num_phases, args.base_dim, base_shape,
-                                 args.activation, is_training=True, param=args.leakiness)
-        disc_fake_g = discriminator(gen_sample_g, alpha, phase, num_phases, args.base_dim,
-                                    activation='leaky_relu', param=args.leakiness)
-        gen_loss = -tf.reduce_mean(disc_fake_g)
+        z = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
+        gen_sample = generator(z, alpha, phase, num_phases,
+                                 args.base_dim, base_shape, activation=args.activation,
+                                 is_training=True, param=args.leakiness)
 
-        # Discriminator training
-        z_d = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
-        gen_sample_d = tf.stop_gradient(
-            generator(z_d, alpha, phase, num_phases, args.base_dim, base_shape, args.activation,
-                      is_training=True, param=args.leakiness, is_reuse=True)
-        )
+        # Discriminator Training
+        disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
+                                    args.base_dim, activation=args.activation, param=args.leakiness)
+        disc_real = discriminator(real_image_input, alpha, phase, num_phases,
+                                    args.base_dim, activation=args.activation, param=args.leakiness, is_reuse=True)
 
-        disc_fake_d = discriminator(gen_sample_d, alpha, phase, num_phases,
-                                    args.base_dim, activation='leaky_relu', param=args.leakiness,
-                                    is_reuse=True)
-
-        disc_real_d = discriminator(real_image_input, alpha, phase, num_phases, args.base_dim,
-                                    activation='leaky_relu', param=args.leakiness, is_reuse=True)
-
-        wgan_disc_loss = disc_fake_d - disc_real_d
+        wgan_disc_loss = disc_fake_d - disc_real
 
         gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
-        interpolates = gamma * real_image_input + (1 - gamma) * gen_sample_d
+        interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
         gradients = tf.gradients(discriminator(interpolates, alpha, phase,
                                                num_phases, args.base_dim, is_reuse=True, activation=args.activation,
                                                param=args.leakiness), [interpolates])[0]
@@ -119,8 +108,50 @@ def main(args, config):
         gradient_penalty = (slopes - args.gp_center) ** 2
         gp_loss = args.gp_weight * gradient_penalty
 
-        drift_loss = 1e-3 * disc_real_d ** 2
+        drift_loss = 1e-3 * disc_real ** 2
         disc_loss = tf.reduce_mean(wgan_disc_loss + gp_loss + drift_loss)
+
+        # Generator training.
+        disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, args.base_dim,
+                                    activation=args.activation, param=args.leakiness, is_reuse=True)
+
+        gen_loss = -tf.reduce_mean(disc_fake_g)
+
+        # # Generator training.
+        # z_g = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
+        # gen_sample_g = generator(z_g, alpha, phase, num_phases, args.base_dim, base_shape,
+        #                          args.activation, is_training=True, param=args.leakiness)
+        # disc_fake_g = discriminator(gen_sample_g, alpha, phase, num_phases, args.base_dim,
+        #                             activation='leaky_relu', param=args.leakiness)
+        # gen_loss = -tf.reduce_mean(disc_fake_g)
+
+        # # Discriminator training
+        # z_d = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
+        # gen_sample_d = tf.stop_gradient(
+        #     generator(z_d, alpha, phase, num_phases, args.base_dim, base_shape, args.activation,
+        #               is_training=True, param=args.leakiness, is_reuse=True)
+        # )
+
+        # disc_fake_d = discriminator(gen_sample_d, alpha, phase, num_phases,
+        #                             args.base_dim, activation='leaky_relu', param=args.leakiness,
+        #                             is_reuse=True)
+
+        # disc_real_d = discriminator(real_image_input, alpha, phase, num_phases, args.base_dim,
+        #                             activation='leaky_relu', param=args.leakiness, is_reuse=True)
+
+        # wgan_disc_loss = disc_fake_d - disc_real_d
+
+        # gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
+        # interpolates = gamma * real_image_input + (1 - gamma) * gen_sample_d
+        # gradients = tf.gradients(discriminator(interpolates, alpha, phase,
+        #                                        num_phases, args.base_dim, is_reuse=True, activation=args.activation,
+        #                                        param=args.leakiness), [interpolates])[0]
+        # slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=(1, 2, 3, 4)))
+        # gradient_penalty = (slopes - args.gp_center) ** 2
+        # gp_loss = args.gp_weight * gradient_penalty
+
+        # drift_loss = 1e-3 * disc_real_d ** 2
+        # disc_loss = tf.reduce_mean(wgan_disc_loss + gp_loss + drift_loss)
 
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
@@ -163,6 +194,8 @@ def main(args, config):
             # anneal_d_lr = d_lr.assign(d_lr * args.d_annealing)
 
             optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+            # optimizer_gen = tf.contrib.opt.MovingAverageOptimizer(optimizer_gen,
+            #                                                       average_decay=args.ema_beta)
             optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
             # Training Variables for each optimizer
@@ -181,10 +214,8 @@ def main(args, config):
             train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
             train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
 
-            ema = tf.train.ExponentialMovingAverage(decay=.99)
-            with tf.control_dependencies([train_gen]):
-                ema_op = ema.apply(gen_vars)
-
+            ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
+            ema_op = ema.apply(gen_vars)
             # Transfer EMA values to original variables
             ema_update_weights = tf.group(
                 [tf.assign(var, ema.average(var)) for var in gen_vars])
@@ -203,15 +234,15 @@ def main(args, config):
             real_image_grid = image_grid(real_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
 
-            fake_image_grid = tf.transpose(gen_sample_d[0], (1, 2, 3, 0))
+            fake_image_grid = tf.transpose(gen_sample[0], (1, 2, 3, 0))
             fake_image_grid = image_grid(fake_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
 
             tf.summary.image('real_image', real_image_grid)
             tf.summary.image('fake_image', fake_image_grid)
 
-            tf.summary.scalar('fake_image_min', tf.math.reduce_min(gen_sample_d))
-            tf.summary.scalar('fake_image_max', tf.math.reduce_max(gen_sample_d))
+            tf.summary.scalar('fake_image_min', tf.math.reduce_min(gen_sample))
+            tf.summary.scalar('fake_image_max', tf.math.reduce_max(gen_sample))
 
             tf.summary.scalar('real_image_min', tf.math.reduce_min(real_image_input[0]))
             tf.summary.scalar('real_image_max', tf.math.reduce_max(real_image_input[0]))
@@ -235,10 +266,6 @@ def main(args, config):
                     print(f"Restoring session with {var_names} variables.")
                 saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
 
-                for n in trainable_variable_names:
-                    if n not in var_names:
-                        print(f"Not loading {n}")
-
             elif var_list is not None and args.continue_path and phase == args.starting_phase:
                 var_names = [v.name for v in var_list]
                 trainable_variable_names = [v.name for v in tf.trainable_variables()]
@@ -253,46 +280,40 @@ def main(args, config):
             if phase < args.starting_phase:
                 continue
 
-            sess.run(init_alpha)
+            if phase == args.starting_phase:
+                sess.run(alpha.assign(args.starting_alpha))
+            else:
+                sess.run(init_alpha)
+
             if verbose:
                 print(f"Begin mixing epochs in phase {phase}")
             if args.horovod:
                 sess.run(hvd.broadcast_global_variables(0))
 
             local_step = 0
-
             while True:
 
                 start = time.time()
-                if local_step % 1024 == 0:
+                if local_step % 1024 == 0 and local_step > 1:
+                    sess.run(ema_update_weights)
                     if args.horovod:
-                        # Broadcast variables every 128 gradient steps.
+                        # Broadcast variables every 1024 gradient steps.
                         sess.run(hvd.broadcast_global_variables(0))
                     saver = tf.train.Saver(var_list)
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
-                # Update generator moving average.
-                # start_ma = time.time()
-                # end_ma = time.time()
-                # print(f"Update moving average took {end_ma - start_ma} seconds.")
-
                 # sess.run(warmup_d_lr)  # Warmup the learning rates.
                 # sess.run(warmup_g_lr)  # Warmup the learning rates.
 
-                _, _, summary, d_loss, g_loss, = sess.run(
-                    [train_gen, train_disc, merged_summaries, disc_loss, gen_loss]
-                )
-
-                sess.run(ema_op)
-                sess.run(ema_update_weights)
-
-                end = time.time()
-                img_s = global_size * batch_size / (end - start)
-
+                _, _, summary, d_loss, g_loss = sess.run(
+                     [train_gen, train_disc, merged_summaries,
+                      disc_loss, gen_loss])
                 global_step += batch_size * global_size
                 local_step += 1
 
+                end = time.time()
+                img_s = global_size * batch_size / (end - start)
                 if verbose:
                     writer.add_summary(summary, global_step)
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
@@ -304,7 +325,6 @@ def main(args, config):
                           f"g_loss {g_loss:.4f} \t "
                           f"alpha {alpha.eval():.2f}")
 
-                sess.run(update_alpha)
                 # sess.run(anneal_d_lr)
                 # sess.run(anneal_g_lr)
 
@@ -312,34 +332,38 @@ def main(args, config):
                         + args.mixing_nimg:
                     break
 
+                sess.run(update_alpha)
+                sess.run(ema_op)
+
                 assert alpha.eval() >= 0
 
             if verbose:
                 print(f"Begin stabilizing epochs in phase {phase}")
 
             sess.run(alpha.assign(0))
+
             while True:
                 start = time.time()
                 assert alpha.eval() == 0
-                # Broadcast variables every 128 gradient steps.
-                if local_step % 1024 == 0:
+                # Broadcast variables every 1024 gradient steps.
+                if local_step % 1024 == 0 and local_step > 0:
+
+                    sess.run(ema_update_weights)
                     if args.horovod:
                         sess.run(hvd.broadcast_global_variables(0))
                     saver = tf.train.Saver(var_list)
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
-                _, _,  summary, d_loss, g_loss = sess.run(
-                     [train_gen, train_disc,  merged_summaries, disc_loss, gen_loss])
+                _, _, summary, d_loss, g_loss = sess.run(
+                     [train_gen, train_disc, merged_summaries,
+                      disc_loss, gen_loss])
 
-                sess.run(ema_op)
-                sess.run(ema_update_weights)
-
-                end = time.time()
-                img_s = global_size * batch_size / (end - start)
                 global_step += batch_size * global_size
                 local_step += 1
 
+                end = time.time()
+                img_s = global_size * batch_size / (end - start)
                 if verbose:
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]), global_step)
                     writer.add_summary(summary, global_step)
@@ -352,6 +376,7 @@ def main(args, config):
 
                     # sess.run(anneal_g_lr)
                     # sess.run(anneal_d_lr)
+                sess.run(ema_op)
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
                     if verbose:
@@ -378,13 +403,14 @@ def main(args, config):
                         start_loc = 0
                     real_batch = np.stack([npy_data[i] for i in range(start_loc, start_loc + batch_size)])
                     real_batch = real_batch / 1024 - 1
-                    fake_batch = sess.run(gen_sample_d)
+                    fake_batch = sess.run(gen_sample)
 
                     # [-1, 2] -> [0, 255]
                     normalize_op = lambda x: np.clip((((x / 3) + 1 / 3) * 255).astype(np.int16),
                                                      0, 255)
 
-                    fids_local.append(get_fid_for_volumes(real_batch, fake_batch, normalize_op))
+                    fids_local.append(get_fid_for_volumes(sess, real_batch, fake_batch,
+                                                          normalize_op))
 
                     if calc_swds:
                         swds = get_swd_for_volumes(real_batch, fake_batch)
@@ -437,6 +463,7 @@ def main(args, config):
 
                 # Save Session.
                 # var_list = tf.trainable_variables()
+                sess.run(ema_update_weights)
                 saver = tf.train.Saver(var_list)
                 saver.save(sess, os.path.join(logdir, f'model_{phase}'))
 
@@ -461,7 +488,7 @@ if __name__ == '__main__':
     parser.add_argument('--gp_center', type=float, default=1)
     parser.add_argument('--gp_weight', type=float, default=10)
     parser.add_argument('--activation', type=str, default='leaky_relu')
-    parser.add_argument('--leakiness', type=float, default=0.2)
+    parser.add_argument('--leakiness', type=float, default=0.3)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--horovod', default=False, action='store_true')
     parser.add_argument('--calc_metrics', default=False, action='store_true')
@@ -472,11 +499,13 @@ if __name__ == '__main__':
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
     parser.add_argument('--beta2', type=float, default=0.99)
+    parser.add_argument('--ema_beta', type=float, default=0.9)
     parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')
     parser.add_argument('--g_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
+    parser.add_argument('--starting_alpha', default=1, type=float)
     # parser.add_argument('--lr_warmup_epochs', default=5, type=int)
     args = parser.parse_args()
 
@@ -489,14 +518,14 @@ if __name__ == '__main__':
         config.gpu_options.visible_device_list = str(hvd.local_rank())
 
         os.environ['KMP_AFFINITY'] = 'granularity=fine,verbose,compact,1,0'
-        os.environ['KMP_BLOCKTIME'] = str(1)
-        os.environ['OMP_NUM_THREADS'] = str(16)
+        # os.environ['KMP_BLOCKTIME'] = str(1)
+        # os.environ['OMP_NUM_THREADS'] = str(16)
 
         np.random.seed(args.seed + hvd.rank())
         tf.random.set_random_seed(args.seed + hvd.rank())
         random.seed(args.seed + hvd.rank())
 
-        print(f"Rank {hvd.rank()} reporting!")
+        print(f"Rank {hvd.rank()}:{hvd.local_rank()} reporting!")
 
     else:
         np.random.seed(args.seed)
