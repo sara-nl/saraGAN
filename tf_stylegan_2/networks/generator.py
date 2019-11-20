@@ -13,8 +13,8 @@ def generator(z, alpha, phase, num_phases, base_dim, base_shape, activation, is_
         if is_reuse:
             scope.reuse_variables()
 
-        d_z_avg = tf.get_variable('d_z_avg', shape=z.get_shape().as_list()[1], trainable=True)
-
+        d_z_avg = tf.get_variable('d_z_ag', shape=z.get_shape().as_list()[1], initializer=tf.initializers.zeros(),
+                                  trainable=False)
         d_z = g_mapping(z, phase)
 
         if is_training:
