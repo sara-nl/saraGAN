@@ -3,7 +3,7 @@ import itertools
 PARAMS = [
     ('dataset_path', ['/lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/']),
     ('final_shape', ["'(1, 128, 512, 512)'"]),
-    ('--starting_phase', [3]),
+    ('--starting_phase', [4]),
     ('--ending_phase', [5]),
     ('--base_dim', [256]),
     ('--latent_dim', [256]),

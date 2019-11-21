@@ -481,11 +481,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     gopts = tf.GraphOptions(place_pruned_graph=True)
-    config = tf.ConfigProto(graph_options=gopts,
-                            intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
-                            inter_op_parallelism_threads=2,
-                            allow_soft_placement=True, device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
+    # config = tf.ConfigProto(graph_options=gopts,
+    #                         intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
+    #                         inter_op_parallelism_threads=2,
+    #                         allow_soft_placement=True, device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 
+
+    config = tf.ConfigProto(graph_options=gopts)
     config.gpu_options.allow_growth = True
 
     if args.horovod:
