@@ -23,7 +23,7 @@ def discriminator_out(x, base_dim, filters_out, activation, param):
         with tf.variable_scope('dense_1'):
             x = dense(x, base_dim, activation=activation, param=param)
             x = apply_bias(x)
-        x = act(x, activation, param=param)
+            x = act(x, activation, param=param)
         with tf.variable_scope('dense_2'):
             x = dense(x, 1, activation='linear')
             x = apply_bias(x)

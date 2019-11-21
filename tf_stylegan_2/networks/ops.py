@@ -57,7 +57,7 @@ def conv3d(x, fmaps, kernel, activation, param=None):
 
 
 def leaky_relu(x, alpha_lr=0.2):
-    with tf.variable_scope('leaky_reu'):
+    with tf.variable_scope('leaky_relu'):
         alpha_lr = tf.constant(alpha_lr, dtype=x.dtype, name='alpha_lr')
         @tf.custom_gradient
         def func(x):
@@ -74,6 +74,9 @@ def act(x, activation, param=None):
     if activation == 'leaky_relu':
         assert param is not None
         x = leaky_relu(x, alpha_lr=param)
+
+    else:
+        raise ValueError(f"Unknown activation {activation}")
     return x
 
 

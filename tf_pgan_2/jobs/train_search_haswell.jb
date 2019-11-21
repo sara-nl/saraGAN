@@ -1,17 +1,21 @@
 #!/bin/bash
 
 #SBATCH -N 16
-#SBATCH -n 32
+#SBATCH -n 16
 #SBATCH -t 0-4:00:00
+#SBATCH -c 12
 #SBATCH -p normal --constraint=haswell
 
 source /home/davidr/tf_cpu.sh
 module list
-cd /home/davidr/projects/saraGAN/tf_pgan/
+cd /home/davidr/projects/saraGAN/tf_pgan_2/
 
+echo $OMP_NUM_THREADS
 export KMP_BLOCKTIME=0
+export KMP_SETTINGS=1
+export KMP_AFFINITY='granularity=fine,verbose,compact,1,0'
+
 export TF_XLA_FLAGS=--tf_xla_cpu_global_jit
-export OMP_NUM_THREADS=12
 
 RUN_BRANCH='development'
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
@@ -23,7 +27,7 @@ fi
 ARGS=$(python get_args.py)
 IFS=';' read -ra ADDR <<< "$ARGS"
 
-BASE_COMMAND="mpirun -np 32 --map-by ppr:1:socket:pe=12 python -u main.py"
+BASE_COMMAND="mpirun -np 16 --map-by ppr:1:socket:pe=12 python -u main.py"
 echo "Number of hyperparameter combinations: ${#ADDR[@]}"
 
 for ARG in "${ADDR[@]}"; do
@@ -31,7 +35,5 @@ for ARG in "${ADDR[@]}"; do
     echo ""
     echo "$CMD"
     echo ""
-    $CMD
+    eval $CMD
 done
-
-# mpirun -np 16 --map-by ppr:1:socket:pe=16 python -u main.py /lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/ 512 128 --starting_phase 2 --horovod --calc_metrics --use_ext_clf --lr_annealing --num_metric_samples 128 --mixing_nimg $((2**16)) --stabilizing_nimg $((2**16)) --lr_scaling linear --gp_center 0 --beta1 0.5

@@ -58,6 +58,10 @@ def main(args, config):
                          max(1, args.max_batch_size // (phase * global_size)))
         assert batch_size * global_size <= 128
 
+
+        if verbose:
+            print(f"Using local batch size of {128} and global batch size of {batch_size * global_size}")
+
         if args.horovod:
             dataset.shard(hvd.size(), hvd.rank())
 
@@ -499,7 +503,7 @@ if __name__ == '__main__':
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
     parser.add_argument('--beta2', type=float, default=0.99)
-    parser.add_argument('--ema_beta', type=float, default=0.9)
+    parser.add_argument('--ema_beta', type=float, default=0.99)
     parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')
     parser.add_argument('--g_scaling', default='none', choices=['linear', 'sqrt', 'none'],

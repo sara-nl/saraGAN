@@ -192,10 +192,6 @@ def frechet_classifier_distance_from_activations(real_activations,
     return fid
 
 
-inception_images = tf.compat.v1.placeholder(tf.float32, [None, 3, None, None])
-activations1 = tf.compat.v1.placeholder(tf.float32, [None, None], name='activations1')
-activations2 = tf.compat.v1.placeholder(tf.float32, [None, None], name='activations2')
-fcd = frechet_classifier_distance_from_activations(activations1, activations2)
 
 INCEPTION_URL = 'http://download.tensorflow.org/models/frozen_inception_v1_2015_12_05.tar.gz'
 INCEPTION_FROZEN_GRAPH = 'inceptionv1_for_inception_score.pb'
@@ -320,26 +316,24 @@ def run_inception(images,
     return activations
 
 
-def inception_activations(images=inception_images, num_splits=1):
+def inception_activations(images, num_splits=1):
+
     images = tf.transpose(images, [0, 2, 3, 1])
     size = 299
     images = tf.compat.v1.image.resize_bilinear(images, [size, size])
     generated_images_list = array_ops.split(images, num_or_size_splits=num_splits)
-    activations = tf.map_fn(
+    inc_activations = tf.map_fn(
         fn=functools.partial(run_inception, output_tensor='pool_3:0'),
         elems=array_ops.stack(generated_images_list),
         parallel_iterations=8,
         back_prop=False,
         swap_memory=True,
         name='RunClassifier')
-    activations = array_ops.concat(array_ops.unstack(activations), 0)
-    return activations
+    inc_activations = array_ops.concat(array_ops.unstack(inc_activations), 0)
+    return inc_activations
 
 
-activations = inception_activations()
-
-
-def get_inception_activations(session, inps):
+def get_inception_activations(session, activations, inception_images, inps):
     n_batches = int(np.ceil(float(inps.shape[0]) / BATCH_SIZE))
     act = np.zeros([inps.shape[0], 2048], dtype=np.float32)
     for i in range(n_batches):
@@ -350,9 +344,10 @@ def get_inception_activations(session, inps):
     return act
 
 
-def activations2distance(session, act1, act2):
+def activations2distance(session, activations1, activations2, act1, act2):
     assert act1.ndim == 2
     assert act2.ndim == 2
+    fcd = frechet_classifier_distance_from_activations(activations1, activations2)
     print(act1.shape, act2.shape, act1.min(), act2.min(), act1.max(), act2.max(), act1.dtype,
           act2.dtype)
     d = session.run(fcd, feed_dict={activations1: act1, activations2: act2})
@@ -360,7 +355,7 @@ def activations2distance(session, act1, act2):
     return d
 
 
-def get_fid(session, images1, images2):
+def get_fid(session, activations, inception_images, images1, images2):
     assert (type(images1) == np.ndarray)
     assert (len(images1.shape) == 4)
     assert (images1.shape[1] == 3)
@@ -379,14 +374,17 @@ def get_fid(session, images1, images2):
     assert (images1.shape == images2.shape), 'The two numpy arrays must have the same shape'
     # print('Calculating FID with %i images from each distribution' % (images1.shape[0]))
     # start_time = time.time()
-    act1 = get_inception_activations(session, images1)
-    act2 = get_inception_activations(session, images2)
-    fid = activations2distance(session, act1, act2)
+    activations1 = tf.compat.v1.placeholder(tf.float32, [None, None], name='activations1')
+    activations2 = tf.compat.v1.placeholder(tf.float32, [None, None], name='activations2')
+
+    act1 = get_inception_activations(session, activations, inception_images, images1)
+    act2 = get_inception_activations(session, activations, inception_images, images2)
+    fid = activations2distance(session, activations1, activations2, act1, act2)
     # print(f'FID {fid} calculation time: %f s' % (time.time() - start_time))
     return fid
 
 
-def get_fid_for_volumes(session, volumes1, volumes2, normalize_op=None):
+def get_fid_for_volumes(session, activations, inception_images, volumes1, volumes2, normalize_op=None):
     if volumes1.shape[1] == 1:
         volumes1 = np.repeat(volumes1, 3, axis=1)
         volumes2 = np.repeat(volumes2, 3, axis=1)
@@ -398,7 +396,7 @@ def get_fid_for_volumes(session, volumes1, volumes2, normalize_op=None):
     # print('volumes1', volumes1.min(), volumes1.max(), volumes1.shape, volumes1.dtype)
     # print('volumes2', volumes2.min(), volumes2.max(), volumes2.shape, volumes2.dtype)
 
-    fids = np.mean([get_fid(session, volumes1[:, :, i, ...], volumes2[:, :, i, ...]) for i in range(
+    fids = np.mean([get_fid(session, activations, inception_images, volumes1[:, :, i, ...], volumes2[:, :, i, ...]) for i in range(
         volumes1.shape[2])])
 
     print(fids)

@@ -58,6 +58,10 @@ def main(args, config):
 
         assert batch_size * global_size <= 128
 
+
+        if verbose:
+            print(f"Using local batch size of {128} and global batch size of {batch_size * global_size}")
+
         if args.horovod:
             dataset.shard(hvd.size(), hvd.rank())
 
@@ -96,7 +100,7 @@ def main(args, config):
         disc_real_d = discriminator(real_image_input, alpha, phase, num_phases,
                                     args.base_dim, activation=args.activation, param=args.leakiness, is_reuse=True)
 
-        wgan_disc_loss = tf.reduce_mean(disc_fake_d) - tf.reduce_mean(disc_real_d)
+        wgan_disc_loss = disc_fake_d - disc_real_d
         gen_loss = -tf.reduce_mean(disc_fake_d)
 
         gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
@@ -105,11 +109,11 @@ def main(args, config):
                                                num_phases, args.base_dim, is_reuse=True, activation=args.activation,
                                                param=args.leakiness), [interpolates])[0]
         slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=(1, 2, 3, 4)))
-        gradient_penalty = tf.reduce_mean((slopes - args.gp_center) ** 2)
+        gradient_penalty = (slopes - args.gp_center) ** 2
 
         gp_loss = args.gp_weight * gradient_penalty
         drift_loss = 1e-3 * tf.reduce_mean(disc_real_d ** 2)
-        disc_loss = wgan_disc_loss + gp_loss + drift_loss
+        disc_loss = tf.reduce_mean(wgan_disc_loss + gp_loss) + drift_loss
 
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
@@ -174,7 +178,7 @@ def main(args, config):
             # Summaries
             tf.summary.scalar('d_loss', disc_loss)
             tf.summary.scalar('g_loss', gen_loss)
-            tf.summary.scalar('gp', gp_loss)
+            tf.summary.scalar('gp', tf.reduce_mean(gp_loss))
 
             real_image_grid = tf.transpose(real_image_input[0], (1, 2, 3, 0))
             shape = real_image_grid.get_shape().as_list()
@@ -457,7 +461,7 @@ if __name__ == '__main__':
 
         os.environ['KMP_AFFINITY'] = 'granularity=fine,verbose,compact,1,0'
         os.environ['KMP_BLOCKTIME'] = str(1)
-        os.environ['OMP_NUM_THREADS'] = str(16)
+        # os.environ['OMP_NUM_THREADS'] = str(16)
 
         np.random.seed(args.seed + hvd.rank())
         tf.random.set_random_seed(args.seed + hvd.rank())

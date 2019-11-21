@@ -8,4 +8,4 @@
 source /home/davidr/tf_gpu.sh
 module list
 cd /home/davidr/projects/saraGAN/tf_stylegan_2/
-srun -n 32 python -u main.py /lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/ '(1, 128, 512, 512)' --starting_phase 5 --ending_phase 8 --horovod --mixing_nimg $((2**18)) --stabilizing_nimg $((2**18)) --d_scaling sqrt --g_scaling sqrt --starting_alpha 1 --continue_path /nfs/home5/davidr/projects/saraGAN/tf_stylegan_2/runs/2019-11-18_18:15:20/model_4
+srun -n 32 python -u main.py /lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/ '(1, 128, 512, 512)' --starting_phase 5 --ending_phase 8 --horovod --mixing_nimg $((2**18)) --stabilizing_nimg $((2**18)) --d_scaling sqrt --g_scaling sqrt --starting_alpha 0 --continue_path /nfs/home5/davidr/projects/saraGAN/tf_stylegan_2/runs/2019-11-18_18:15:20/model_4

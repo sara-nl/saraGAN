@@ -2,20 +2,19 @@ import itertools
 
 PARAMS = [
     ('dataset_path', ['/lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/']),
-    ('final_resolution', [512]),
-    ('final_zdim', [128]),
-    ('--starting_phase', [2]),
-    ('--ending_phase', [4]),
+    ('final_shape', ["'(1, 128, 512, 512)'"]),
+    ('--starting_phase', [3]),
+    ('--ending_phase', [5]),
     ('--base_dim', [256]),
     ('--latent_dim', [256]),
-    ('--base_batch_size', [4]),  # Uncomment and fill to use.
+    ('--max_batch_size', [128]),  # Uncomment and fill to use.
     ('--mixing_nimg', [2 ** 16]),  # Maybe half these to speed up the search?
     ('--stabilizing_nimg', [2 ** 16]),
     ('--learning_rate', [1e-3]),
-    ('--gp_center', [1]),
+    ('--gp_center', [1, 0]),
     ('--gp_weight', [10]),  # Maybe change to add 20 if computation allows.
     ('--activation', ['leaky_relu']),  # Maybe add swish or leaky celu layer.
-    ('--leakiness', [0.3]),
+    ('--leakiness', [0.2]),
     ('--seed', [42]),
     ('--horovod', ['']),
     # ('--fp16_allreduce', ['']),  # Uncomment if you want this.
@@ -29,7 +28,9 @@ PARAMS = [
     ('--d_scaling', ['sqrt']),
     ('--g_scaling', ['sqrt']),
     # ('--lr_warmup_epochs', [5])
+    ('--starting_alpha', [0])
 ]
+
 
 PARAMS_LISTS = list(PARAMS[i][1] for i in range(len(PARAMS)))
 combinations = list(itertools.product(*PARAMS_LISTS))
