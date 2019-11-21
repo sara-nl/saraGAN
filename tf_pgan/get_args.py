@@ -4,7 +4,7 @@ PARAMS = [
     ('dataset_path', ['/lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/']),
     ('final_resolution', [512]),
     ('final_zdim', [128]),
-    ('--starting_phase', [3]),
+    ('--starting_phase', [4]),
     ('--ending_phase', [4]),
     ('--base_dim', [256]),
     ('--latent_dim', [256]),
