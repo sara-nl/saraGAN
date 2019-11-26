@@ -33,5 +33,3 @@ for ARG in "${ADDR[@]}"; do
     echo ""
     $CMD
 done
-
-# mpirun -np 16 --map-by ppr:1:socket:pe=16 python -u main.py /lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/ 512 128 --starting_phase 2 --horovod --calc_metrics --use_ext_clf --lr_annealing --num_metric_samples 128 --mixing_nimg $((2**16)) --stabilizing_nimg $((2**16)) --lr_scaling linear --gp_center 0 --beta1 0.5

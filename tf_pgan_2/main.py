@@ -282,6 +282,8 @@ def main(args, config):
                 global_step += batch_size * global_size
                 local_step += 1
 
+                sess.run(update_alpha)
+                sess.run(ema_op)
                 end = time.time()
                 img_s = global_size * batch_size / (end - start)
                 if verbose:
@@ -301,9 +303,6 @@ def main(args, config):
                 if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) \
                         + args.mixing_nimg:
                     break
-
-                sess.run(update_alpha)
-                sess.run(ema_op)
 
                 assert alpha.eval() >= 0
 
