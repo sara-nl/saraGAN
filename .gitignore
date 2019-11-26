@@ -17,3 +17,4 @@ results/
 dataset/
 interpolates/
 core.*
+*.npy
