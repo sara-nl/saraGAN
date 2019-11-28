@@ -226,7 +226,7 @@ def test():
     num_phases = 9
     base_dim = 256
     base_shape = [1, 1, 4, 4]
-    for phase in range(8, num_phases):
+    for phase in range(4, 5):
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         print(shape)
         x = tf.random.normal(shape=shape)

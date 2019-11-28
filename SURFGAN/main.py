@@ -5,21 +5,17 @@ import tensorflow as tf
 import horovod.tensorflow as hvd
 import time
 import random
-from resnet import resnet
-from metrics.fid import get_fid_for_volumes
-from metrics.swd_new_3d import get_swd_for_volumes
-
+from metrics import get_fid_for_volumes, get_swd_for_volumes
 from dataset import NumpyDataset
-from network import discriminator, generator
-from utils import count_parameters, image_grid
+from networks import discriminator, generator
+from utils import count_parameters, image_grid, parse_tuple
 from mpi4py import MPI
 
 from tensorflow.data.experimental import AUTOTUNE
 
 
 def main(args, config):
-    num_phases = int(np.log2(args.final_resolution) - 1)
-    var_list = None
+
     if args.horovod:
         verbose = hvd.rank() == 0
         global_size = hvd.size()
@@ -39,8 +35,14 @@ def main(args, config):
     else:
         writer = None
 
+    final_shape = parse_tuple(args.final_shape)
+    final_resolution = final_shape[-1]
+    num_phases = int(np.log2(final_resolution) - 1)
+
+    var_list = None
     global_step = 0
 
+    # noinspection DuplicatedCode
     for phase in range(1, num_phases + 1):
 
         tf.reset_default_graph()
@@ -51,12 +53,8 @@ def main(args, config):
         dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
 
         # Get DataLoader
-        if args.base_batch_size:
-            batch_size = max(1, args.base_batch_size // (2 ** phase))
-        else:
-            print('siiiiiize', size)
-            batch_size = max(1, 128 // size)
-
+        batch_size = min(args.max_batch_size,
+                         max(1, args.max_batch_size // (phase * global_size)))
         assert batch_size * global_size <= 128
 
         if verbose:
@@ -78,44 +76,49 @@ def main(args, config):
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         with tf.variable_scope('alpha'):
-            alpha = tf.Variable(1, name='alpha', dtype=tf.float32)
+            alpha: any = tf.Variable(1, name='alpha', dtype=tf.float32)
             # Alpha init
             init_alpha = alpha.assign(1)
 
             # Specify alpha update op for mixing phase.
             num_steps = args.mixing_nimg // (batch_size * global_size)
             alpha_update = 1 / num_steps
+            # noinspection PyTypeChecker
             update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
 
-        zdim_base = max(1, args.final_zdim // (2 ** (num_phases - 1)))
-        print("zdim_base", zdim_base)
+        zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
         base_shape = (1, zdim_base, 4, 4)
 
-        noise_input_d = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
-        print(phase, noise_input_d.shape, num_phases, args.base_dim, base_shape)
-        gen_sample_d = generator(noise_input_d, alpha, phase, num_phases,
-                                 args.base_dim, base_shape, activation=args.activation, param=args.leakiness)
+        z = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
+        gen_sample = generator(z, alpha, phase, num_phases,
+                               args.base_dim, base_shape, activation=args.activation,
+                               is_training=True, param=args.leakiness)
 
-        disc_fake_d = discriminator(gen_sample_d, alpha, phase, num_phases,
-                                    args.base_dim, activation=args.activation, param=args.leakiness, is_reuse=False)
+        # Discriminator Training
+        disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
+                                    args.base_dim, activation=args.activation, param=args.leakiness)
+        disc_real = discriminator(real_image_input, alpha, phase, num_phases,
+                                  args.base_dim, activation=args.activation, param=args.leakiness, is_reuse=True)
 
-        disc_real_d = discriminator(real_image_input, alpha, phase, num_phases,
-                                    args.base_dim, activation=args.activation, param=args.leakiness, is_reuse=True)
-
-        wgan_disc_loss = disc_fake_d - disc_real_d
-        gen_loss = -tf.reduce_mean(disc_fake_d)
+        wgan_disc_loss = disc_fake_d - disc_real
 
         gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
-        interpolates = real_image_input + gamma * (tf.stop_gradient(gen_sample_d) - real_image_input)
+        interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
         gradients = tf.gradients(discriminator(interpolates, alpha, phase,
                                                num_phases, args.base_dim, is_reuse=True, activation=args.activation,
                                                param=args.leakiness), [interpolates])[0]
         slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=(1, 2, 3, 4)))
         gradient_penalty = (slopes - args.gp_center) ** 2
-
         gp_loss = args.gp_weight * gradient_penalty
-        drift_loss = 1e-3 * tf.reduce_mean(disc_real_d ** 2)
-        disc_loss = tf.reduce_mean(wgan_disc_loss + gp_loss) + drift_loss
+
+        drift_loss = 1e-3 * disc_real ** 2
+        disc_loss = tf.reduce_mean(wgan_disc_loss + gp_loss + drift_loss)
+
+        # Generator training.
+        disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, args.base_dim,
+                                    activation=args.activation, param=args.leakiness, is_reuse=True)
+
+        gen_loss = -tf.reduce_mean(disc_fake_g)
 
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
@@ -123,7 +126,6 @@ def main(args, config):
 
         # Build Optimizers
         with tf.variable_scope('optim_ops'):
-
             g_lr = args.learning_rate
             d_lr = args.learning_rate
 
@@ -146,28 +148,11 @@ def main(args, config):
                 else:
                     raise ValueError(args.d_scaling)
 
-            # final_g_lr = g_lr
-            # final_d_lr = d_lr
-            # # g_lr_warmup_step = g_lr / args.lr_warmup_epochs
-            # # d_lr_warmup_step = d_lr / args.lr_warmup_epochs
-            # g_lr = tf.Variable(final_g_lr, name='g_lr', dtype=tf.float32)  # Start at 0 and warmup.
-            # d_lr = tf.Variable(final_d_lr, name='d_lr', dtype=tf.float32)
-            # # warmup_g_lr = g_lr.assign(tf.minimum(final_g_lr, g_lr + g_lr_warmup_step))
-            # # warmup_d_lr = d_lr.assign(tf.minimum(final_d_lr, d_lr + d_lr_warmup_step))
-            # anneal_g_lr = g_lr.assign(g_lr * args.g_annealing)
-            # anneal_d_lr = d_lr.assign(d_lr * args.d_annealing)
-
             optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
             optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
-            # Training Variables for each optimizer
-            # By default in TensorFlow, all variables are updated by each optimizer, so we
-            # need to precise for each one of them the specific variables to update.
-            # Generator Network Variables
             gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
-            # Discriminator Network Variables
             disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-
             if args.horovod:
                 optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
                 optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
@@ -176,6 +161,13 @@ def main(args, config):
             train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
             train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
 
+            ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
+            ema_op = ema.apply(gen_vars)
+            # Transfer EMA values to original variables
+            ema_update_weights = tf.group(
+                [tf.assign(var, ema.average(var)) for var in gen_vars])
+
+        # noinspection DuplicatedCode
         with tf.name_scope('summaries'):
             # Summaries
             tf.summary.scalar('d_loss', disc_loss)
@@ -190,15 +182,15 @@ def main(args, config):
             real_image_grid = image_grid(real_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
 
-            fake_image_grid = tf.transpose(gen_sample_d[0], (1, 2, 3, 0))
+            fake_image_grid = tf.transpose(gen_sample[0], (1, 2, 3, 0))
             fake_image_grid = image_grid(fake_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
 
             tf.summary.image('real_image', real_image_grid)
             tf.summary.image('fake_image', fake_image_grid)
 
-            tf.summary.scalar('fake_image_min', tf.math.reduce_min(gen_sample_d))
-            tf.summary.scalar('fake_image_max', tf.math.reduce_max(gen_sample_d))
+            tf.summary.scalar('fake_image_min', tf.math.reduce_min(gen_sample))
+            tf.summary.scalar('fake_image_max', tf.math.reduce_max(gen_sample))
 
             tf.summary.scalar('real_image_min', tf.math.reduce_min(real_image_input[0]))
             tf.summary.scalar('real_image_max', tf.math.reduce_max(real_image_input[0]))
@@ -211,6 +203,7 @@ def main(args, config):
 
         with tf.Session(config=config) as sess:
 
+            # noinspection DuplicatedCode,DuplicatedCode
             sess.run(tf.global_variables_initializer())
 
             if var_list is not None and phase > args.starting_phase:
@@ -236,38 +229,36 @@ def main(args, config):
             if phase < args.starting_phase:
                 continue
 
-            sess.run(init_alpha)
+            if phase == args.starting_phase:
+                sess.run(alpha.assign(args.starting_alpha))
+            else:
+                sess.run(init_alpha)
+
             if verbose:
                 print(f"Begin mixing epochs in phase {phase}")
             if args.horovod:
                 sess.run(hvd.broadcast_global_variables(0))
 
             local_step = 0
-
             while True:
-
                 start = time.time()
-                if local_step % 1024 == 0:
+                if local_step % 1024 == 0 and local_step > 1:
+                    sess.run(ema_update_weights)
                     if args.horovod:
-                        # Broadcast variables every 128 gradient steps.
+                        # Broadcast variables every 1024 gradient steps.
                         sess.run(hvd.broadcast_global_variables(0))
                     saver = tf.train.Saver(var_list)
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
-                # sess.run(warmup_d_lr)  # Warmup the learning rates.
-                # sess.run(warmup_g_lr)  # Warmup the learning rates.
-
-                _, _, summary, d_loss, g_loss, = sess.run(
-                    [train_gen, train_disc, merged_summaries, disc_loss, gen_loss]
-                 )
-
-                end = time.time()
-                img_s = global_size * batch_size / (end - start)
-
+                _, _, summary, d_loss, g_loss = sess.run(
+                     [train_gen, train_disc, merged_summaries,
+                      disc_loss, gen_loss])
                 global_step += batch_size * global_size
                 local_step += 1
 
+                end = time.time()
+                img_s = global_size * batch_size / (end - start)
                 if verbose:
                     writer.add_summary(summary, global_step)
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
@@ -279,13 +270,12 @@ def main(args, config):
                           f"g_loss {g_loss:.4f} \t "
                           f"alpha {alpha.eval():.2f}")
 
-                sess.run(update_alpha)
-                # sess.run(anneal_d_lr)
-                # sess.run(anneal_g_lr)
-
                 if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) \
                         + args.mixing_nimg:
                     break
+
+                sess.run(update_alpha)
+                sess.run(ema_op)
 
                 assert alpha.eval() >= 0
 
@@ -293,27 +283,32 @@ def main(args, config):
                 print(f"Begin stabilizing epochs in phase {phase}")
 
             sess.run(alpha.assign(0))
+
             while True:
                 start = time.time()
                 assert alpha.eval() == 0
-                # Broadcast variables every 128 gradient steps.
-                if local_step % 1024 == 0:
+                # Broadcast variables every 1024 gradient steps.
+                if local_step % 1024 == 0 and local_step > 0:
+
+                    sess.run(ema_update_weights)
                     if args.horovod:
                         sess.run(hvd.broadcast_global_variables(0))
                     saver = tf.train.Saver(var_list)
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
-                _, _,  summary, d_loss, g_loss = sess.run(
-                     [train_gen, train_disc,  merged_summaries, disc_loss, gen_loss])
+                _, _, summary, d_loss, g_loss = sess.run(
+                     [train_gen, train_disc, merged_summaries,
+                      disc_loss, gen_loss])
 
-                end = time.time()
-                img_s = global_size * batch_size / (end - start)
                 global_step += batch_size * global_size
                 local_step += 1
 
+                end = time.time()
+                img_s = global_size * batch_size / (end - start)
                 if verbose:
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]), global_step)
+                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
+                                       global_step)
                     writer.add_summary(summary, global_step)
 
                     print(f"Step {global_step:09} \t"
@@ -322,8 +317,7 @@ def main(args, config):
                           f"g_loss {g_loss:.4f} \t "
                           f"alpha {alpha.eval():.2f}")
 
-                    # sess.run(anneal_g_lr)
-                    # sess.run(anneal_d_lr)
+                sess.run(ema_op)
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
                     if verbose:
@@ -331,7 +325,8 @@ def main(args, config):
                         opts = tf.profiler.ProfileOptionBuilder.float_operation()
                         g = tf.get_default_graph()
                         flops = tf.profiler.profile(g, run_meta=run_metadata, cmd='op', options=opts)
-                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='graph_flops', simple_value=flops.total_float_ops)]),
+                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='graph_flops',
+                                                                              simple_value=flops.total_float_ops)]),
                                            global_step)
 
                     break
@@ -350,13 +345,14 @@ def main(args, config):
                         start_loc = 0
                     real_batch = np.stack([npy_data[i] for i in range(start_loc, start_loc + batch_size)])
                     real_batch = real_batch / 1024 - 1
-                    fake_batch = sess.run(gen_sample_d)
+                    fake_batch = sess.run(gen_sample)
 
                     # [-1, 2] -> [0, 255]
-                    normalize_op = lambda x: np.clip((((x / 3) + 1 / 3) * 255).astype(np.int16),
-                                                     0, 255)
+                    def normalize_op(x):
+                        return np.clip((((x / 3) + 1 / 3) * 255).astype(np.int16), 0, 255)
 
-                    fids_local.append(get_fid_for_volumes(real_batch, fake_batch, normalize_op))
+                    fids_local.append(get_fid_for_volumes(sess, real_batch, fake_batch,
+                                                          normalize_op))
 
                     if calc_swds:
                         swds = get_swd_for_volumes(real_batch, fake_batch)
@@ -408,7 +404,7 @@ def main(args, config):
                 print("\n\n\n End of phase.")
 
                 # Save Session.
-                # var_list = tf.trainable_variables()
+                sess.run(ema_update_weights)
                 saver = tf.train.Saver(var_list)
                 saver.save(sess, os.path.join(logdir, f'model_{phase}'))
 
@@ -421,13 +417,12 @@ def main(args, config):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('dataset_path', type=str)
-    parser.add_argument('final_resolution', type=int)
-    parser.add_argument('final_zdim', type=int)
+    parser.add_argument('final_shape', type=str, help="'(c, z, y, x)', e.g. '(1, 64, 128, 128)'")
     parser.add_argument('--starting_phase', type=int, default=1)
     parser.add_argument('--ending_phase', type=int, default=None)
     parser.add_argument('--base_dim', type=int, default=256)
     parser.add_argument('--latent_dim', type=int, default=256)
-    parser.add_argument('--base_batch_size', type=int, default=None)
+    parser.add_argument('--max_batch_size', type=int, default=128)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
@@ -437,7 +432,6 @@ if __name__ == '__main__':
     parser.add_argument('--leakiness', type=float, default=0.3)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--horovod', default=False, action='store_true')
-    parser.add_argument('--fp16_allreduce', default=False, action='store_true')
     parser.add_argument('--calc_metrics', default=False, action='store_true')
     parser.add_argument('--g_annealing', default=1,
                         type=float, help='generator annealing rate, 1 -> no annealing.')
@@ -446,15 +440,15 @@ if __name__ == '__main__':
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
     parser.add_argument('--beta2', type=float, default=0.99)
+    parser.add_argument('--ema_beta', type=float, default=0.99)
     parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')
     parser.add_argument('--g_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
-    # parser.add_argument('--lr_warmup_epochs', default=5, type=int)
+    parser.add_argument('--starting_alpha', default=1, type=float)
     args = parser.parse_args()
 
-    config = tf.ConfigProto()
     gopts = tf.GraphOptions(place_pruned_graph=True)
     config = tf.ConfigProto(graph_options=gopts)
     config.gpu_options.allow_growth = True
@@ -462,17 +456,11 @@ if __name__ == '__main__':
     if args.horovod:
         hvd.init()
         config.gpu_options.visible_device_list = str(hvd.local_rank())
-        # os.environ['CUDA_VISIBLE_DEVICES'] = str(hvd.local_rank())
-        print(f"Pinning to GPU device {hvd.local_rank()}")
-        os.environ['KMP_AFFINITY'] = 'granularity=fine,verbose,compact,1,0'
-        os.environ['KMP_BLOCKTIME'] = str(1)
-        # os.environ['OMP_NUM_THREADS'] = str(16)
-
         np.random.seed(args.seed + hvd.rank())
         tf.random.set_random_seed(args.seed + hvd.rank())
         random.seed(args.seed + hvd.rank())
 
-        print(f"Rank {hvd.rank()} reporting!")
+        print(f"Rank {hvd.rank()}:{hvd.local_rank()} reporting!")
 
     else:
         np.random.seed(args.seed)

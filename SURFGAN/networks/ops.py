@@ -59,14 +59,18 @@ def conv3d(x, fmaps, kernel, activation, param=None):
 def leaky_relu(x, alpha_lr=0.2):
     with tf.variable_scope('leaky_relu'):
         alpha_lr = tf.constant(alpha_lr, dtype=x.dtype, name='alpha_lr')
+
         @tf.custom_gradient
         def func(x):
             y = tf.maximum(x, x * alpha_lr)
+
             @tf.custom_gradient
             def grad(dy):
                 dx = tf.where(y >= 0, dy, dy * alpha_lr)
                 return dx, lambda ddx: tf.where(y >= 0, ddx, ddx * alpha_lr)
+
             return y, grad
+
         return func(x)
 
 
@@ -98,7 +102,6 @@ def from_rgb(x, filters_out, activation, param=None):
 
 
 def avg_unpool3d(x, factor=2, gain=1):
-
     if gain != 1:
         x = x * gain
 
@@ -129,11 +132,14 @@ def upscale3d(x, factor=2):
         @tf.custom_gradient
         def func(x):
             y = avg_unpool3d(x, factor)
+
             @tf.custom_gradient
             def grad(dy):
                 dx = avg_pool3d(dy, factor, gain=factor ** 3)
                 return dx, lambda ddx: avg_unpool3d(ddx, factor)
+
             return y, grad
+
         return func(x)
 
 
@@ -142,11 +148,14 @@ def downscale3d(x, factor=2):
         @tf.custom_gradient
         def func(x):
             y = avg_pool3d(x, factor)
+
             @tf.custom_gradient
             def grad(dy):
                 dx = avg_unpool3d(dy, factor, gain=1 / factor ** 3)
                 return dx, lambda ddx: avg_pool3d(ddx, factor)
+
             return y, grad
+
         return func(x)
 
 
@@ -178,6 +187,7 @@ def instance_norm(x, epsilon=1e-8):
         x *= tf.rsqrt(tf.reduce_mean(tf.square(x), axis=[2, 3, 4], keepdims=True) + epsilon)
         return x
 
+
 def apply_noise(x, noise_var=None, randomize_noise=True):
     assert len(x.shape) == 5  # NCDHW
     with tf.variable_scope('apply_noise'):
@@ -201,4 +211,3 @@ def conv3d_depthwise(x, f, strides, padding):
     filters = tf.split(f, f.shape[-2], axis=-2)
     x = tf.concat([tf.nn.conv3d(i, f, strides=strides, padding=padding) for i, f in zip(x, filters)], axis=-1)
     return x
-
