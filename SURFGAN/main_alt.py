@@ -6,7 +6,7 @@ import horovod.tensorflow as hvd
 import time
 import random
 from metrics.fid import get_fid_for_volumes
-from metrics.swd_new_3d import get_swd_for_volumes
+from metrics.swd import get_swd_for_volumes
 
 from dataset import NumpyDataset
 from networks import discriminator, generator
@@ -91,7 +91,8 @@ def main(args, config):
         z = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
         gen_sample_g = generator(z, alpha, phase, num_phases,
                                  args.base_dim, base_shape, activation=args.activation,
-                                 is_training=True, param=args.leakiness)
+                                 # is_training=True,
+                                 param=args.leakiness)
         # Generator training.
         disc_fake_g = discriminator(gen_sample_g, alpha, phase, num_phases, args.base_dim,
                                     activation=args.activation, param=args.leakiness)

@@ -444,11 +444,13 @@ def test():
     # print('black+patches/black+noise', get_fid_for_volumes(noise_black_patches1, black_noise1, normalize_op=norm_op))
 
     # print('black/black+noise', get_fid_for_volumes(const_batch1, black_noise1, normalize_op=norm_op))
-    print('rand/rand+blackpatches',
-          get_fid_for_volumes(rand_batch1, noise_black_patches1, normalize_op=norm_op))
+    with tf.Session() as sess:
 
-    print('black/rand+blackpatches',
-          get_fid_for_volumes(const_batch1, noise_black_patches1, normalize_op=norm_op))
+        print('rand/rand+blackpatches',
+              get_fid_for_volumes(sess, rand_batch1, noise_black_patches1, normalize_op=norm_op))
+
+        print('black/rand+blackpatches',
+              get_fid_for_volumes(const_batch1, noise_black_patches1, normalize_op=norm_op))
 
 
 if __name__ == '__main__':

@@ -130,12 +130,12 @@ if __name__ == '__main__':
     # ----------------------------------------------------------------------------
 
     shape = (128, 1, 32, 128, 128)
-    const_batch1 = np.full(shape=shape, fill_value=.05).astype(np.float32)
-    const_batch2 = np.full(shape=shape, fill_value=.05).astype(np.float32)
-    rand_batch1 = np.random.rand(*shape)
-    rand_batch2 = np.random.rand(*shape)
-    black_noise1 = const_batch1 + np.random.randn(*const_batch1.shape) * .01
-    black_noise2 = const_batch1 + np.random.randn(*const_batch1.shape) * .01
+    const_batch1 = np.full(shape=shape, fill_value=-1000).astype(np.int16)
+    const_batch2 = np.full(shape=shape, fill_value=-1000).astype(np.int16)
+    rand_batch1 = (np.clip(np.random.rand(*shape), -1, 2) * 1024).astype(np.int16)
+    rand_batch2 = (np.clip(np.random.rand(*shape), -1, 2) * 1024).astype(np.int16)
+    black_noise1 = const_batch1 + np.random.randn(*const_batch1.shape)
+    black_noise2 = const_batch1 + np.random.randn(*const_batch1.shape)
     noise_black_patches1 = rand_batch1.copy()
     noise_black_patches2 = rand_batch2.copy()
 
