@@ -56,6 +56,19 @@ def conv3d(x, fmaps, kernel, activation, param=None):
     return tf.nn.conv3d(x, w, strides=[1, 1, 1, 1, 1], padding='SAME', data_format='NCDHW')
 
 
+def group_conv3d(x, filter, groups):
+
+    inputs = tf.split(x, groups, axis=1)
+    filters = tf.split(filter, groups, axis=-2)
+    output = tf.concat(
+        [tf.nn.conv3d(i, f,
+                      strides=[1, 1, 1, 1, 1],
+                      padding='SAME',
+                      data_format='NCDHW')
+         for i, f in zip(inputs, filters)], axis=1)
+
+    return output
+
 def leaky_relu(x, alpha_lr=0.2):
     with tf.variable_scope('leaky_relu'):
         alpha_lr = tf.constant(alpha_lr, dtype=x.dtype, name='alpha_lr')
@@ -87,6 +100,7 @@ def act(x, activation, param=None):
 def num_filters(phase, num_phases, base_dim):
     num_downscales = int(np.log2(base_dim / 32))
     filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
+    print(filters)
     return filters
 
 
@@ -159,9 +173,9 @@ def downscale3d(x, factor=2):
         return func(x)
 
 
-# def pixel_norm(x, epsilon=1e-8):
-#     with tf.variable_scope('pixel_norm'):
-#         return x * tf.rsqrt(tf.reduce_mean(tf.square(x), axis=1, keepdims=True) + epsilon)
+def pixel_norm(x, epsilon=1e-8):
+    with tf.variable_scope('pixel_norm'):
+        return x * tf.rsqrt(tf.reduce_mean(tf.square(x), axis=1, keepdims=True) + epsilon)
 
 
 def minibatch_stddev_layer(x, group_size=4):

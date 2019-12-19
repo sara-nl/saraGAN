@@ -17,13 +17,14 @@ def get_psnr(real, fake, data_range=3):
 def get_ssim(real, fake, data_range=3):
     real = np.transpose(real, [0, 2, 3, 4, 1])
     fake = np.transpose(fake, [0, 2, 3, 4, 1])
+    print(real.shape, fake.shape)
     return structural_similarity(real, fake, data_range=data_range, multichannel=True, gaussian_weights=True)
 
 
 if __name__ == '__main__':
 
-    volume1 = (np.clip(np.random.normal(size=(128, 1, 16, 64, 64)), -1, 2) * 1024).astype(np.int16)
-    volume2 = (np.clip(np.random.normal(size=(128, 1, 16, 64, 64)), -1, 2) * 1024).astype(np.int16)
+    volume1 = (np.clip(np.random.normal(size=(64, 1, 16, 64, 64)), -1, 2) * 1024).astype(np.int16)
+    volume2 = (np.clip(np.random.normal(size=(64, 1, 16, 64, 64)), -1, 2) * 1024).astype(np.int16)
 
     print(volume1.min(), volume2.max(), volume1.min(), volume2.max())
 

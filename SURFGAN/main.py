@@ -8,12 +8,12 @@ import random
 from metrics import (get_fid_for_volumes, inception_activations, get_swd_for_volumes,
                      get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
 from dataset import NumpyDataset
-from networks import discriminator, generator
 from utils import count_parameters, image_grid, parse_tuple
 from mpi4py import MPI
 import nvgpu
 import psutil
 import subprocess
+import importlib
 
 from tensorflow.data.experimental import AUTOTUNE
 
@@ -28,7 +28,7 @@ def main(args, config):
         global_size = 1
 
     timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
-    logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', timestamp)
+    logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
 
     if verbose:
         writer = tf.summary.FileWriter(logdir=logdir)
@@ -99,16 +99,17 @@ def main(args, config):
 
         # Discriminator Training
         disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
-                                    args.base_dim, activation=args.activation, param=args.leakiness)
+                                    args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness)
         disc_real = discriminator(real_image_input, alpha, phase, num_phases,
-                                  args.base_dim, activation=args.activation, param=args.leakiness, is_reuse=True)
+                                  args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness, is_reuse=True)
 
         wgan_disc_loss = disc_fake_d - disc_real
 
         gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
         interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
         gradients = tf.gradients(discriminator(interpolates, alpha, phase,
-                                               num_phases, args.base_dim, is_reuse=True, activation=args.activation,
+                                               num_phases, args.base_dim, args.latent_dim,
+                                               is_reuse=True, activation=args.activation,
                                                param=args.leakiness), [interpolates])[0]
         slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=(1, 2, 3, 4)))
         gradient_penalty = (slopes - args.gp_center) ** 2
@@ -118,7 +119,7 @@ def main(args, config):
         disc_loss = tf.reduce_mean(wgan_disc_loss + gp_loss + drift_loss)
 
         # Generator training.
-        disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, args.base_dim,
+        disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, args.base_dim, args.latent_dim,
                                     activation=args.activation, param=args.leakiness, is_reuse=True)
 
         gen_loss = -tf.reduce_mean(disc_fake_g)
@@ -126,6 +127,8 @@ def main(args, config):
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
             print(f"Discriminator parameters:: {count_parameters('discriminator')}")
+        gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+        disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
 
         # Build Optimizers
         with tf.variable_scope('optim_ops'):
@@ -172,9 +175,6 @@ def main(args, config):
 
             train_gen = optimizer_gen.apply_gradients(g_clipped_grads)
             train_disc = optimizer_disc.apply_gradients(d_clipped_grads)
-
-            gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
-            disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
 
             # # Create training operations
             # train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
@@ -366,6 +366,8 @@ def main(args, config):
 
             # Calculate metrics.
             calc_swds: bool = size >= 16
+            print(npy_data.shape)
+            calc_ssims: bool = min(npy_data.shape[1:]) >= 32
 
             if args.calc_metrics:
                 fids_local = []
@@ -382,7 +384,8 @@ def main(args, config):
                     else:
                         start_loc = 0
                     real_batch = np.stack([npy_data[i] for i in range(start_loc, start_loc + batch_size)])
-                    fake_batch = sess.run(gen_sample)
+                    real_batch = real_batch.astype(np.int16) - 1024
+                    fake_batch = sess.run(gen_sample).astype(np.float32)
 
                     # Turn fake batch into HUs and clip to training range.
                     fake_batch = (np.clip(fake_batch, -1, 2) * 1024).astype(np.int16)
@@ -390,19 +393,22 @@ def main(args, config):
                     if verbose:
                         print('real min, max', real_batch.min(), real_batch.max())
                         print('fake min, max', fake_batch.min(), fake_batch.max())
+                    
+                    fid_normalization = lambda x: (256 * (((x / 1024) + 1) / 3)).astype(np.int16)
 
-                    fids_local.append(get_fid_for_volumes(sess, activations, inception_images, real_batch, fake_batch))
+                    fids_local.append(get_fid_for_volumes(sess, activations, inception_images, real_batch, fake_batch, normalize_op=fid_normalization))
                     if calc_swds:
                         swds = get_swd_for_volumes(real_batch, fake_batch)
                         swds_local.append(swds)
 
                     psnr = get_psnr(real_batch, fake_batch)
-                    ssim = get_ssim(real_batch, fake_batch)
+                    if calc_ssims:
+                        ssim = get_ssim(real_batch, fake_batch)
+                        ssims_local.append(ssim)
                     mse = get_mean_squared_error(real_batch, fake_batch)
                     nrmse = get_normalized_root_mse(real_batch, fake_batch)
 
                     psnrs_local.append(psnr)
-                    ssims_local.append(ssim)
                     mses_local.append(mse)
                     nrmses_local.append(nrmse)
 
@@ -442,6 +448,16 @@ def main(args, config):
                     else:
                         swds = swds_local
 
+                if calc_ssims:
+                    ssims_local = np.array(ssims_local)
+                    # Average over batches
+                    ssims_local = ssims_local.mean(axis=0)
+                    if args.horovod:
+                        ssims = MPI.COMM_WORLD.allreduce(ssims_local, op=MPI.SUM) / hvd.size()
+                    else:
+                        ssims = ssims_local
+
+
                 if verbose:
                     print(f"FID: {fid:.4f}")
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='fid',
@@ -453,7 +469,7 @@ def main(args, config):
                                                                           simple_value=psnr)]),
                                        global_step)
 
-                    print(f": {fid:.4f}")
+                    print(f"SSIM: {fid:.4f}")
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='ssim',
                                                                           simple_value=ssim)]),
                                        global_step)
@@ -479,6 +495,18 @@ def main(args, config):
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
                                                                               simple_value=swds[
                                                                                   -1])]), global_step)
+                    if calc_ssims:
+                        print(f"SWDS: {ssims}")
+                        for i in range(len(ssims))[:-1]:
+                            lod = 16 * 2 ** i
+                            writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_{lod}',
+                                                                                  simple_value=ssims[
+                                                                                      i])]),
+                                               global_step)
+                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
+                                                                              simple_value=ssims[
+                                                                                  -1])]), global_step)
+
 
             if verbose:
                 print("\n\n\n End of phase.")
@@ -496,12 +524,13 @@ def main(args, config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('architecture', type=str)
     parser.add_argument('dataset_path', type=str)
     parser.add_argument('final_shape', type=str, help="'(c, z, y, x)', e.g. '(1, 64, 128, 128)'")
-    parser.add_argument('--starting_phase', type=int, default=1)
-    parser.add_argument('--ending_phase', type=int, default=None)
-    parser.add_argument('--base_dim', type=int, default=256)
-    parser.add_argument('--latent_dim', type=int, default=256)
+    parser.add_argument('--starting_phase', type=int, default=None, required=True)
+    parser.add_argument('--ending_phase', type=int, default=None, required=True)
+    parser.add_argument('--base_dim', type=int, default=None, required=True)
+    parser.add_argument('--latent_dim', type=int, default=None, required=True)
     parser.add_argument('--max_batch_size', type=int, default=128)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
@@ -533,13 +562,12 @@ if __name__ == '__main__':
     config = tf.ConfigProto(graph_options=gopts)
     config.gpu_options.allow_growth = True
 
+    discriminator = importlib.import_module(f'networks.{args.architecture}.discriminator').discriminator
+    generator = importlib.import_module(f'networks.{args.architecture}.generator').generator
+
     if args.horovod:
         hvd.init()
         config.gpu_options.visible_device_list = str(hvd.local_rank())
-
-        # os.environ['KMP_AFFINITY'] = 'granularity=fine,verbose,compact,1,0'
-        # os.environ['KMP_BLOCKTIME'] = str(1)
-        # os.environ['OMP_NUM_THREADS'] = str(16)
 
         np.random.seed(args.seed + hvd.rank())
         tf.random.set_random_seed(args.seed + hvd.rank())

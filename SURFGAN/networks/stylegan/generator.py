@@ -1,6 +1,6 @@
 import tensorflow as tf
-from networks.g_mapping import g_mapping
-from networks.g_synthesis import g_synthesis
+from networks.stylegan.g_mapping import g_mapping
+from networks.stylegan.g_synthesis import g_synthesis
 
 
 def generator(z,

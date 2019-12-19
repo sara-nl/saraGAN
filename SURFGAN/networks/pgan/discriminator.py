@@ -1,4 +1,5 @@
 from networks.ops import *
+import time
 
 
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
@@ -14,14 +15,14 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
     return x
 
 
-def discriminator_out(x, base_dim, filters_out, activation, param):
+def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
     with tf.variable_scope(f'discriminator_out'):
         # x = minibatch_stddev_layer(x)
         x = conv3d(x, filters_out, 3, activation=activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         with tf.variable_scope('dense_1'):
-            x = dense(x, base_dim, activation=activation, param=param)
+            x = dense(x, latent_dim, activation=activation, param=param)
             x = apply_bias(x)
             x = act(x, activation, param=param)
         with tf.variable_scope('dense_2'):
@@ -31,7 +32,7 @@ def discriminator_out(x, base_dim, filters_out, activation, param):
         return x
 
 
-def discriminator(x, alpha, phase, num_phases, base_dim, activation, param=None, is_reuse=False):
+def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation, param=None, is_reuse=False):
     with tf.variable_scope('discriminator') as scope:
 
         if is_reuse:
@@ -58,5 +59,38 @@ def discriminator(x, alpha, phase, num_phases, base_dim, activation, param=None,
 
                 x = alpha * fromrgb_prev + (1 - alpha) * x
 
-        x = discriminator_out(x, base_dim, filters_out, activation, param)
+        x = discriminator_out(x, latent_dim, base_dim, filters_out, activation, param)
         return x
+
+
+
+if __name__ == '__main__':
+    num_phases = 9
+    base_dim = 512
+    base_shape = [1, 1, 4, 4]
+    for phase in range(8, 9):
+        shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
+        print(shape)
+        x = tf.random.normal(shape=shape)
+        y = discriminator(x, 0.5, phase, num_phases, base_dim, activation='leaky_relu', param=0.3)
+
+        loss = tf.reduce_sum(y)
+        optim = tf.train.GradientDescentOptimizer(1e-5)
+        train = optim.minimize(loss)
+        print('Discriminator output shape:', y.shape)
+
+        for p in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='discriminator'):
+            print(np.product(p.shape), p.name)  # i.name if you want just a name
+
+        print('Total discriminator variables:',
+              sum(np.product(p.shape) for p in tf.trainable_variables('discriminator')))
+
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            start = time.time()
+            sess.run(train)
+
+            end = time.time()
+
+            print(f"{end - start} seconds")
+
