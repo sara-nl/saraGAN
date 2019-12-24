@@ -533,7 +533,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_batch_size', type=int, default=128)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
+    parser.add_argument('--learning_rate', type=float, default=5e-4)
     parser.add_argument('--gp_center', type=float, default=0)
     parser.add_argument('--base_gp_weight', type=float, default=1)
     parser.add_argument('--activation', type=str, default='leaky_relu')
@@ -549,9 +549,9 @@ if __name__ == '__main__':
     parser.add_argument('--beta1', type=float, default=0)
     parser.add_argument('--beta2', type=float, default=0.99)
     parser.add_argument('--ema_beta', type=float, default=0.99)
-    parser.add_argument('--d_scaling', default='linear', choices=['linear', 'sqrt', 'none'],
+    parser.add_argument('--d_scaling', default='sqrt', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')
-    parser.add_argument('--g_scaling', default='none', choices=['linear', 'sqrt', 'none'],
+    parser.add_argument('--g_scaling', default='sqrt', choices=['linear', 'sqrt', 'none'],
                         help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
     parser.add_argument('--starting_alpha', default=1, type=float)
