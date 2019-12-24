@@ -14,6 +14,7 @@ import nvgpu
 import psutil
 import subprocess
 import importlib
+import os
 
 from tensorflow.data.experimental import AUTOTUNE
 
@@ -52,7 +53,7 @@ def main(args, config):
         # Get Dataset.
         size = 2 * 2 ** phase
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
-        npy_data = NumpyDataset(data_path, '/scratch', copy_files=hvd.local_rank() == 0)
+        npy_data = NumpyDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0)
         dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
 
         # Get DataLoader
@@ -530,6 +531,7 @@ if __name__ == '__main__':
     parser.add_argument('--ending_phase', type=int, default=None, required=True)
     parser.add_argument('--base_dim', type=int, default=None, required=True)
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
+    parser.add_argument('--scratch_path', type=str, default=None, required=True)
     parser.add_argument('--max_batch_size', type=int, default=128)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
@@ -558,7 +560,12 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     gopts = tf.GraphOptions(place_pruned_graph=True)
-    config = tf.ConfigProto(graph_options=gopts)
+    config = tf.ConfigProto(graph_options=gopts,
+                            intra_op_parallelism_threads=os.environ['OMP_NUM_THREADS'],
+                            inter_op_parallelism_threads=2,
+                            allow_soft_placement=True,
+                            device_count={'CPU': os.environ['OMP_NUM_THREADS']})
+
     config.gpu_options.allow_growth = True
 
     discriminator = importlib.import_module(f'networks.{args.architecture}.discriminator').discriminator
