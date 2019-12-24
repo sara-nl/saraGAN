@@ -1,7 +1,10 @@
-#!/usr/bin/bash
-#SBATCH -N 2
-#SBATCH -n 4
-#SBATCH -p gpu
-#SBATCH -t 2-00:00:00
+#!/bin/bash
+#SBATCH -N 4
+#SBATCH -n 16
+# #SBATCH -p gpu --gres=gpu:titanv:4
+#SBATCH -p gpu_titanrtx
+#SBATCH -t 5-00:00:00
+
 source /home/davidr/tf_gpu36.sh
-bash /home/davidr/projects/saraGAN/SURFGAN/scripts/run.sh
+cd /home/davidr/projects/saraGAN/SURFGAN/
+mpirun -n 16 -npernode 4 python -u main.py pgan /nfs/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 6 --ending_phase 8 --base_dim 256 --latent_dim 256 --horovod --starting_alpha 0 --continue_path '/home/davidr/projects/saraGAN/SURFGAN/runs/pgan/2019-12-22_13:03:44/model_5'

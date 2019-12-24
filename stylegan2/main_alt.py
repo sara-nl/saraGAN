@@ -5,15 +5,13 @@ import tensorflow as tf
 import horovod.tensorflow as hvd
 import time
 import random
-from metrics import (get_fid_for_volumes, inception_activations, get_swd_for_volumes,
-                     get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
+from metrics.fid import get_fid_for_volumes
+from metrics.swd_new_3d import get_swd_for_volumes
+
 from dataset import NumpyDataset
+from networks import discriminator, generator
 from utils import count_parameters, image_grid, parse_tuple
 from mpi4py import MPI
-import nvgpu
-import psutil
-import subprocess
-import importlib
 
 from tensorflow.data.experimental import AUTOTUNE
 
@@ -28,7 +26,7 @@ def main(args, config):
         global_size = 1
 
     timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
-    logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
+    logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', timestamp)
 
     if verbose:
         writer = tf.summary.FileWriter(logdir=logdir)
@@ -52,15 +50,13 @@ def main(args, config):
         # Get Dataset.
         size = 2 * 2 ** phase
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
-        npy_data = NumpyDataset(data_path, '/scratch', copy_files=hvd.local_rank() == 0)
+        npy_data = NumpyDataset(data_path)
         dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
 
         # Get DataLoader
-        batch_size = max(1, args.max_batch_size // ((2 ** (phase - 1)) * global_size))
+        batch_size = min(args.max_batch_size,
+                         max(1, args.max_batch_size // (phase * global_size)))
         assert batch_size * global_size <= 128
-
-        if verbose:
-            print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")
 
         if args.horovod:
             dataset.shard(hvd.size(), hvd.rank())
@@ -85,53 +81,52 @@ def main(args, config):
             # Specify alpha update op for mixing phase.
             num_steps = args.mixing_nimg // (batch_size * global_size)
             alpha_update = 1 / num_steps
-            # noinspection PyTypeChecker
             update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
 
         zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
         base_shape = (1, zdim_base, 4, 4)
 
+        # Generator training.
         z = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
-        gen_sample = generator(z, alpha, phase, num_phases,
-                               args.base_dim, base_shape, activation=args.activation,
-                               # is_training=True,
-                               param=args.leakiness)
+        gen_sample_g = generator(z, alpha, phase, num_phases,
+                                 args.base_dim, base_shape, activation=args.activation,
+                                 is_training=True, param=args.leakiness)
+        # Generator training.
+        disc_fake_g = discriminator(gen_sample_g, alpha, phase, num_phases, args.base_dim,
+                                    activation=args.activation, param=args.leakiness)
+
+        gen_loss = -tf.reduce_mean(disc_fake_g)
 
         # Discriminator Training
-        disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
-                                    args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness)
+        gen_sample_d = tf.placeholder(shape=real_image_input.get_shape().as_list(), dtype=tf.float32)
+        disc_fake_d = discriminator(gen_sample_d, alpha, phase, num_phases,
+                                    args.base_dim, activation=args.activation,
+                                    param=args.leakiness, is_reuse=True)
         disc_real = discriminator(real_image_input, alpha, phase, num_phases,
-                                  args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness, is_reuse=True)
+                                  args.base_dim, activation=args.activation, param=args.leakiness,
+                                  is_reuse=True)
 
         wgan_disc_loss = disc_fake_d - disc_real
 
         gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
-        interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
+        interpolates = gamma * real_image_input + (1 - gamma) * gen_sample_d
         gradients = tf.gradients(discriminator(interpolates, alpha, phase,
-                                               num_phases, args.base_dim, args.latent_dim,
-                                               is_reuse=True, activation=args.activation,
+                                               num_phases, args.base_dim, is_reuse=True, activation=args.activation,
                                                param=args.leakiness), [interpolates])[0]
         slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=(1, 2, 3, 4)))
         gradient_penalty = (slopes - args.gp_center) ** 2
-        gp_loss = (args.base_gp_weight * 2 ** phase) * gradient_penalty
+        gp_loss = args.gp_weight * gradient_penalty
 
         drift_loss = 1e-3 * disc_real ** 2
         disc_loss = tf.reduce_mean(wgan_disc_loss + gp_loss + drift_loss)
 
-        # Generator training.
-        disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, args.base_dim, args.latent_dim,
-                                    activation=args.activation, param=args.leakiness, is_reuse=True)
-
-        gen_loss = -tf.reduce_mean(disc_fake_g)
-
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
             print(f"Discriminator parameters:: {count_parameters('discriminator')}")
-        gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
-        disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
 
         # Build Optimizers
         with tf.variable_scope('optim_ops'):
+
             g_lr = args.learning_rate
             d_lr = args.learning_rate
 
@@ -154,31 +149,37 @@ def main(args, config):
                 else:
                     raise ValueError(args.d_scaling)
 
+            # final_g_lr = g_lr
+            # final_d_lr = d_lr
+            # # g_lr_warmup_step = g_lr / args.lr_warmup_epochs
+            # # d_lr_warmup_step = d_lr / args.lr_warmup_epochs
+            # g_lr = tf.Variable(final_g_lr, name='g_lr', dtype=tf.float32)  # Start at 0 and warmup.
+            # d_lr = tf.Variable(final_d_lr, name='d_lr', dtype=tf.float32)
+            # # warmup_g_lr = g_lr.assign(tf.minimum(final_g_lr, g_lr + g_lr_warmup_step))
+            # # warmup_d_lr = d_lr.assign(tf.minimum(final_d_lr, d_lr + d_lr_warmup_step))
+            # anneal_g_lr = g_lr.assign(g_lr * args.g_annealing)
+            # anneal_d_lr = d_lr.assign(d_lr * args.d_annealing)
+
             optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+            # optimizer_gen = tf.contrib.opt.MovingAverageOptimizer(optimizer_gen,
+            #                                                       average_decay=args.ema_beta)
             optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+
+            # Training Variables for each optimizer
+            # By default in TensorFlow, all variables are updated by each optimizer, so we
+            # need to precise for each one of them the specific variables to update.
+            # Generator Network Variables
+            gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+            # Discriminator Network Variables
+            disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
 
             if args.horovod:
                 optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
                 optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
 
-            g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
-            d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
-
-            g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
-            max_g_norm = tf.reduce_max(g_norms)
-            d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
-            max_d_norm = tf.reduce_max(d_norms)
-
-            # 128 is very large. Might want to clip lower, keep track of max norms in Tensorboard.
-            g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad, var in g_gradients]
-            d_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad, var in d_gradients]
-
-            train_gen = optimizer_gen.apply_gradients(g_clipped_grads)
-            train_disc = optimizer_disc.apply_gradients(d_clipped_grads)
-
-            # # Create training operations
-            # train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
-            # train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
+            # Create training operations
+            train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
+            train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
 
             ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
             ema_op = ema.apply(gen_vars)
@@ -186,18 +187,10 @@ def main(args, config):
             ema_update_weights = tf.group(
                 [tf.assign(var, ema.average(var)) for var in gen_vars])
 
-            if args.calc_metrics:
-                inception_images = tf.compat.v1.placeholder(tf.float32, [None, 3, None, None])
-                activations = inception_activations(inception_images)
-
-        with tf.name_scope('summaries'):
+        with tf.name_scope('summary_d'):
             # Summaries
-            tf.summary.scalar('d_loss', disc_loss)
-            tf.summary.scalar('g_loss', gen_loss)
-            tf.summary.scalar('gp', tf.reduce_mean(gp_loss))
-
-            tf.summary.scalar('max_g_grad_norm', max_g_norm)
-            tf.summary.scalar('max_d_grad_norm', max_d_norm)
+            d_loss_summary = tf.summary.scalar('d_loss', disc_loss)
+            gp_summary = tf.summary.scalar('gp', tf.reduce_mean(gp_loss))
 
             real_image_grid = tf.transpose(real_image_input[0], (1, 2, 3, 0))
             shape = real_image_grid.get_shape().as_list()
@@ -206,25 +199,40 @@ def main(args, config):
             grid_shape = [grid_rows, grid_cols]
             real_image_grid = image_grid(real_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
+            real_image_summary = tf.summary.image('real_image', real_image_grid)
 
-            fake_image_grid = tf.transpose(gen_sample[0], (1, 2, 3, 0))
+            real_img_min_summary = tf.summary.scalar('real_image_min', tf.math.reduce_min(
+                real_image_input[
+                                                                                    0]))
+            real_img_max_summary = tf.summary.scalar('real_image_max', tf.math.reduce_max(
+                real_image_input[0]))
+
+            d_lr_summary = tf.summary.scalar('d_lr', d_lr)
+
+            merged_summaries_d = tf.summary.merge([d_lr_summary, real_img_max_summary,
+                                                   real_img_min_summary, real_image_summary,
+                                                   d_loss_summary, gp_summary])
+
+        with tf.name_scope('summary_g'):
+            # Summaries
+            g_loss_summmary = tf.summary.scalar('g_loss', gen_loss)
+            fake_image_grid = tf.transpose(gen_sample_g[0], (1, 2, 3, 0))
             fake_image_grid = image_grid(fake_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
 
-            tf.summary.image('real_image', real_image_grid)
-            tf.summary.image('fake_image', fake_image_grid)
+            fake_image_summary = tf.summary.image('fake_image', fake_image_grid)
 
-            tf.summary.scalar('fake_image_min', tf.math.reduce_min(gen_sample))
-            tf.summary.scalar('fake_image_max', tf.math.reduce_max(gen_sample))
+            fake_image_min_summary = tf.summary.scalar('fake_image_min', tf.math.reduce_min(
+                gen_sample_g))
+            fake_image_max_summary = tf.summary.scalar('fake_image_max', tf.math.reduce_max(
+                gen_sample_g))
+            alpha_summary = tf.summary.scalar('alpha', alpha)
 
-            tf.summary.scalar('real_image_min', tf.math.reduce_min(real_image_input[0]))
-            tf.summary.scalar('real_image_max', tf.math.reduce_max(real_image_input[0]))
-            tf.summary.scalar('alpha', alpha)
-
-            tf.summary.scalar('g_lr', g_lr)
-            tf.summary.scalar('d_lr', d_lr)
-
-            merged_summaries = tf.summary.merge_all()
+            g_lr_summary = tf.summary.scalar('g_lr', g_lr)
+            merged_summaries_g = tf.summary.merge([g_loss_summmary, fake_image_summary,
+                                                   fake_image_min_summary,
+                                                   fake_image_max_summary, alpha_summary,
+                                                   g_lr_summary])
 
         with tf.Session(config=config) as sess:
 
@@ -265,8 +273,9 @@ def main(args, config):
 
             local_step = 0
             while True:
+
                 start = time.time()
-                if local_step % 2048 == 0 and local_step > 1:
+                if local_step % 1024 == 0 and local_step > 1:
                     sess.run(ema_update_weights)
                     if args.horovod:
                         # Broadcast variables every 1024 gradient steps.
@@ -275,25 +284,40 @@ def main(args, config):
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
-                _, _, summary, d_loss, g_loss = sess.run(
-                     [train_gen, train_disc, merged_summaries,
-                      disc_loss, gen_loss])
+                # sess.run(warmup_d_lr)  # Warmup the learning rates.
+                # sess.run(warmup_g_lr)  # Warmup the learning rates.
+                if local_step > 0:
+                    _, g_loss, g_sample, g_summary = sess.run([train_gen, gen_loss, gen_sample_g,
+                                                               merged_summaries_g])
+                else:
+                    g_sample = sess.run(gen_sample_g)
+
+                _, d_loss, d_summary = sess.run(
+                     [train_disc, disc_loss, merged_summaries_d],
+                     feed_dict={gen_sample_d: g_sample})
+
                 global_step += batch_size * global_size
-                local_step += 1
 
                 end = time.time()
                 img_s = global_size * batch_size / (end - start)
                 if verbose:
-                    writer.add_summary(summary, global_step)
+                    if local_step > 0:
+                        writer.add_summary(g_summary, global_step)
+                    writer.add_summary(d_summary, global_step)
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                        global_step)
 
-                    print(f"Step {global_step:09} \t"
-                          f"img/s {img_s:.2f} \t "
-                          f"d_loss {d_loss:.4f} \t "
-                          f"g_loss {g_loss:.4f} \t "
-                          f"alpha {alpha.eval():.2f}")
+                    if local_step > 0:
+                        print(f"Step {global_step:09} \t"
+                              f"img/s {img_s:.2f} \t "
+                              f"d_loss {d_loss:.4f} \t "
+                              f"g_loss {g_loss:.4f} \t "
+                              f"alpha {alpha.eval():.2f}")
 
+                # sess.run(anneal_d_lr)
+                # sess.run(anneal_g_lr)
+
+                local_step += 1
                 if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) \
                         + args.mixing_nimg:
                     break
@@ -321,19 +345,22 @@ def main(args, config):
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
-                _, _, summary, d_loss, g_loss = sess.run(
-                     [train_gen, train_disc, merged_summaries,
-                      disc_loss, gen_loss])
+                _, g_loss, g_sample, g_summary = sess.run([train_gen, gen_loss, gen_sample_g,
+                                                            merged_summaries_g])
+
+                _, d_loss, d_summary = sess.run(
+                     [train_disc, disc_loss, merged_summaries_d],
+                     feed_dict={gen_sample_d: g_sample})
 
                 global_step += batch_size * global_size
-                local_step += 1
 
                 end = time.time()
                 img_s = global_size * batch_size / (end - start)
                 if verbose:
+                    writer.add_summary(g_summary, global_step)
+                    writer.add_summary(d_summary, global_step)
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                        global_step)
-                    writer.add_summary(summary, global_step)
 
                     print(f"Step {global_step:09} \t"
                           f"img/s {img_s:.2f} \t "
@@ -341,42 +368,28 @@ def main(args, config):
                           f"g_loss {g_loss:.4f} \t "
                           f"alpha {alpha.eval():.2f}")
 
+                # sess.run(anneal_d_lr)
+                # sess.run(anneal_g_lr)
                 sess.run(ema_op)
+                local_step += 1
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
-                    # if verbose:
-                    #     run_metadata = tf.RunMetadata()
-                    #     opts = tf.profiler.ProfileOptionBuilder.float_operation()
-                    #     g = tf.get_default_graph()
-                    #     flops = tf.profiler.profile(g, run_meta=run_metadata, cmd='op', options=opts)
-                    #     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='graph_flops',
-                    #                                                           simple_value=flops.total_float_ops)]),
-                    #                        global_step)
-                    #
-                    #     # Print memory info.
-                    #     try:
-                    #         print(nvgpu.gpu_info())
-                    #     except subprocess.CalledProcessError:
-                    #         pid = os.getpid()
-                    #         py = psutil.Process(pid)
-                    #         print(f"CPU Percent: {py.cpu_percent()}")
-                    #         print(f"Memory info: {py.memory_info()}")
+                    if verbose:
+                        run_metadata = tf.RunMetadata()
+                        opts = tf.profiler.ProfileOptionBuilder.float_operation()
+                        g = tf.get_default_graph()
+                        flops = tf.profiler.profile(g, run_meta=run_metadata, cmd='op', options=opts)
+                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='graph_flops', simple_value=flops.total_float_ops)]),
+                                           global_step)
 
                     break
 
             # Calculate metrics.
             calc_swds: bool = size >= 16
-            print(npy_data.shape)
-            calc_ssims: bool = min(npy_data.shape[1:]) >= 32
 
             if args.calc_metrics:
                 fids_local = []
                 swds_local = []
-                psnrs_local = []
-                mses_local = []
-                nrmses_local = []
-                ssims_local = []
-
                 counter = 0
                 while True:
                     if args.horovod:
@@ -384,33 +397,19 @@ def main(args, config):
                     else:
                         start_loc = 0
                     real_batch = np.stack([npy_data[i] for i in range(start_loc, start_loc + batch_size)])
-                    real_batch = real_batch.astype(np.int16) - 1024
-                    fake_batch = sess.run(gen_sample).astype(np.float32)
+                    real_batch = real_batch / 1024 - 1
+                    fake_batch = sess.run(gen_sample_g)
 
-                    # Turn fake batch into HUs and clip to training range.
-                    fake_batch = (np.clip(fake_batch, -1, 2) * 1024).astype(np.int16)
+                    # [-1, 2] -> [0, 255]
+                    normalize_op = lambda x: np.clip((((x / 3) + 1 / 3) * 255).astype(np.int16),
+                                                     0, 255)
 
-                    if verbose:
-                        print('real min, max', real_batch.min(), real_batch.max())
-                        print('fake min, max', fake_batch.min(), fake_batch.max())
-                    
-                    fid_normalization = lambda x: (256 * (((x / 1024) + 1) / 3)).astype(np.int16)
+                    fids_local.append(get_fid_for_volumes(sess, real_batch, fake_batch,
+                                                          normalize_op))
 
-                    fids_local.append(get_fid_for_volumes(sess, activations, inception_images, real_batch, fake_batch, normalize_op=fid_normalization))
                     if calc_swds:
                         swds = get_swd_for_volumes(real_batch, fake_batch)
                         swds_local.append(swds)
-
-                    psnr = get_psnr(real_batch, fake_batch)
-                    if calc_ssims:
-                        ssim = get_ssim(real_batch, fake_batch)
-                        ssims_local.append(ssim)
-                    mse = get_mean_squared_error(real_batch, fake_batch)
-                    nrmse = get_normalized_root_mse(real_batch, fake_batch)
-
-                    psnrs_local.append(psnr)
-                    mses_local.append(mse)
-                    nrmses_local.append(nrmse)
 
                     if args.horovod:
                         counter = counter + global_size * batch_size
@@ -421,24 +420,12 @@ def main(args, config):
                         break
 
                 fid_local = np.mean(fids_local)
-                psnr_local = np.mean(psnrs_local)
-                ssim_local = np.mean(ssims_local)
-                mse_local = np.mean(mses_local)
-                nrmse_local = np.mean(nrmses_local)
-
                 if args.horovod:
                     fid = MPI.COMM_WORLD.allreduce(fid_local, op=MPI.SUM) / hvd.size()
-                    psnr = MPI.COMM_WORLD.allreduce(psnr_local, op=MPI.SUM) / hvd.size()
-                    ssim = MPI.COMM_WORLD.allreduce(ssim_local, op=MPI.SUM) / hvd.size()
-                    mse = MPI.COMM_WORLD.allreduce(mse_local, op=MPI.SUM) / hvd.size()
-                    nrmse = MPI.COMM_WORLD.allreduce(nrmse_local, op=MPI.SUM) / hvd.size()
                 else:
                     fid = fid_local
-                    psnr = psnr_local
-                    ssim = ssim_local
-                    mse = mse_local
-                    nrmse = nrmse_local
 
+                # swds_local explanation: list of laplacian polytope: (16x16, 32x32, 64x64..., MEAN)
                 if calc_swds:
                     swds_local = np.array(swds_local)
                     # Average over batches
@@ -448,40 +435,10 @@ def main(args, config):
                     else:
                         swds = swds_local
 
-                if calc_ssims:
-                    ssims_local = np.array(ssims_local)
-                    # Average over batches
-                    ssims_local = ssims_local.mean(axis=0)
-                    if args.horovod:
-                        ssims = MPI.COMM_WORLD.allreduce(ssims_local, op=MPI.SUM) / hvd.size()
-                    else:
-                        ssims = ssims_local
-
-
                 if verbose:
                     print(f"FID: {fid:.4f}")
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='fid',
                                                                           simple_value=fid)]),
-                                       global_step)
-
-                    print(f"PSNR: {psnr:.4f}")
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='psnr',
-                                                                          simple_value=psnr)]),
-                                       global_step)
-
-                    print(f"SSIM: {fid:.4f}")
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='ssim',
-                                                                          simple_value=ssim)]),
-                                       global_step)
-
-                    print(f"MSE: {mse:.4f}")
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='mse',
-                                                                          simple_value=mse)]),
-                                       global_step)
-
-                    print(f"Normalized Root MSE: {nrmse:.4f}")
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='nrmse',
-                                                                          simple_value=nrmse)]),
                                        global_step)
 
                     if calc_swds:
@@ -495,22 +452,12 @@ def main(args, config):
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
                                                                               simple_value=swds[
                                                                                   -1])]), global_step)
-                    if calc_ssims:
-                        print(f"SWDS: {ssims}")
-                        for i in range(len(ssims))[:-1]:
-                            lod = 16 * 2 ** i
-                            writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_{lod}',
-                                                                                  simple_value=ssims[
-                                                                                      i])]),
-                                               global_step)
-                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
-                                                                              simple_value=ssims[
-                                                                                  -1])]), global_step)
 
             if verbose:
                 print("\n\n\n End of phase.")
 
                 # Save Session.
+                # var_list = tf.trainable_variables()
                 sess.run(ema_update_weights)
                 saver = tf.train.Saver(var_list)
                 saver.save(sess, os.path.join(logdir, f'model_{phase}'))
@@ -523,21 +470,20 @@ def main(args, config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('architecture', type=str)
     parser.add_argument('dataset_path', type=str)
     parser.add_argument('final_shape', type=str, help="'(c, z, y, x)', e.g. '(1, 64, 128, 128)'")
-    parser.add_argument('--starting_phase', type=int, default=None, required=True)
-    parser.add_argument('--ending_phase', type=int, default=None, required=True)
-    parser.add_argument('--base_dim', type=int, default=None, required=True)
-    parser.add_argument('--latent_dim', type=int, default=None, required=True)
+    parser.add_argument('--starting_phase', type=int, default=1)
+    parser.add_argument('--ending_phase', type=int, default=None)
+    parser.add_argument('--base_dim', type=int, default=256)
+    parser.add_argument('--latent_dim', type=int, default=256)
     parser.add_argument('--max_batch_size', type=int, default=128)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
-    parser.add_argument('--gp_center', type=float, default=0)
-    parser.add_argument('--base_gp_weight', type=float, default=1)
+    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--gp_center', type=float, default=1)
+    parser.add_argument('--gp_weight', type=float, default=10)
     parser.add_argument('--activation', type=str, default='leaky_relu')
-    parser.add_argument('--leakiness', type=float, default=0.2)
+    parser.add_argument('--leakiness', type=float, default=0.3)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--horovod', default=False, action='store_true')
     parser.add_argument('--calc_metrics', default=False, action='store_true')
@@ -548,25 +494,27 @@ if __name__ == '__main__':
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
     parser.add_argument('--beta2', type=float, default=0.99)
-    parser.add_argument('--ema_beta', type=float, default=0.99)
-    parser.add_argument('--d_scaling', default='linear', choices=['linear', 'sqrt', 'none'],
+    parser.add_argument('--ema_beta', type=float, default=0.9)
+    parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')
     parser.add_argument('--g_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
     parser.add_argument('--starting_alpha', default=1, type=float)
+    # parser.add_argument('--lr_warmup_epochs', default=5, type=int)
     args = parser.parse_args()
 
     gopts = tf.GraphOptions(place_pruned_graph=True)
     config = tf.ConfigProto(graph_options=gopts)
     config.gpu_options.allow_growth = True
 
-    discriminator = importlib.import_module(f'networks.{args.architecture}.discriminator').discriminator
-    generator = importlib.import_module(f'networks.{args.architecture}.generator').generator
-
     if args.horovod:
         hvd.init()
         config.gpu_options.visible_device_list = str(hvd.local_rank())
+
+        os.environ['KMP_AFFINITY'] = 'granularity=fine,verbose,compact,1,0'
+        # os.environ['KMP_BLOCKTIME'] = str(1)
+        # os.environ['OMP_NUM_THREADS'] = str(16)
 
         np.random.seed(args.seed + hvd.rank())
         tf.random.set_random_seed(args.seed + hvd.rank())

@@ -1,12 +1,30 @@
 import glob
 import numpy as np
+import os
+import shutil
+import time
 
 
 class NumpyDataset:
-    def __init__(self, npy_dir):
+    def __init__(self, npy_dir, scratch_dir, copy_files):
         super(NumpyDataset, self).__init__()
         self.npy_files = glob.glob(npy_dir + '*.npy')
         print(f"Length of dataset: {len(self.npy_files)}")
+
+        self.scratch_dir = os.path.normpath(scratch_dir + npy_dir)
+
+        if copy_files:
+            os.makedirs(self.scratch_dir, exist_ok=True)
+            print("Copying files to scratch...")
+            for f in self.npy_files:
+                os.path.isdir(self.scratch_dir)
+                shutil.copy(f, os.path.normpath(scratch_dir + f))
+
+        while len(glob.glob(self.scratch_dir + '/*.npy')) < len(self.npy_files):
+            time.sleep(1)
+
+        self.scratch_files = glob.glob(self.scratch_dir + '/*.npy')
+        assert len(self.scratch_files) == len(self.npy_files)
 
         test_npy_array = np.load(self.npy_files[0])[np.newaxis, ...]
         self.shape = test_npy_array.shape
