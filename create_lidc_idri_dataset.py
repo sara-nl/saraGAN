@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 from skimage.measure import block_reduce
 import h5py
 import sys
+from tqdm import tqdm
 
 
 def get_dcm_paths(root):
@@ -27,7 +28,6 @@ def read_dcm_series(path):
     sitk_image = reader.Execute()
 
     return sitk_image
-
 
 def absmax(a, axis=None):
     amax = a.max(axis)
@@ -196,7 +196,7 @@ def read_resample_resize_dcm(path, reduce_fn):
     
     resampled_array = resampled_array - pad_value
     resampled_array = np.pad(resampled_array, [(0, 0), (int(np.floor(y_pad)), int(np.ceil(y_pad))), (int(np.floor(x_pad)), int(np.ceil(x_pad)))], constant_values=0, mode='constant')
-        
+
     if resampled_array.shape[0] > 128:
         resampled_array = resampled_array[resampled_array.shape[0] - 128:, :, :]
     else:
@@ -222,15 +222,16 @@ def get_dicom_iterator(root, reduce_fn):
         try:
             array, metadata = read_resample_resize_dcm(path, reduce_fn=reduce_fn)
         except RuntimeError as e:
-            print(e)
             print("Continuing...")
             continue
         else:
             yield array, metadata
 
+average = np.average
 # reduce_fn = lanczos_3d
-reduce_fn = absmax
-dataset_dir = f'/project/davidr/lidc_idri/'
+# reduce_fn = absmax
+reduce_fn = average
+dataset_dir = f'/lustre4/2/managed_datasets/LIDC-IDRI'
 # hdf5_dir = os.path.join(dataset_dir, 'hdf5', reduce_fn.__name__)
 # 
 # if not os.path.exists(hdf5_dir):
@@ -241,7 +242,8 @@ dataset_dir = f'/project/davidr/lidc_idri/'
 total = len(os.listdir(dataset_dir))
 num_iters = total
 
-for i, (arrays, metadata) in enumerate(get_dicom_iterator(dataset_dir, reduce_fn)):
+for i, (arrays, metadata) in enumerate(tqdm(get_dicom_iterator(dataset_dir, reduce_fn))):
+    
     
     intercept = metadata['intercept']
     
@@ -258,22 +260,23 @@ for i, (arrays, metadata) in enumerate(get_dicom_iterator(dataset_dir, reduce_fn
         #     hdf5_file.create_dataset('intercept', [num_iters] + list(intercept.shape), np.int)
         #     hdf5_files[f'{size}x{size}'] = hdf5_file
     
-    for array in arrays:
+    for j, array in enumerate(arrays):
+
         size = array.shape[-1]
         # hdf5_files[f'{size}x{size}']['data'][i, ...] = array[None]
         # hdf5_files[f'{size}x{size}']['intercept'][i, ...] = intercept
         
-        pt_dir = os.path.join(dataset_dir, 'pt', reduce_fn.__name__, f'{size}x{size}')
-        # npy_dir = os.path.join(dataset_dir, 'npy', reduce_fn.__name__, f'{size}x{size}')
+        # pt_dir = os.path.join(dataset_dir, 'pt', reduce_fn.__name__, f'{size}x{size}')
+        npy_dir = os.path.join(dataset_dir, 'npy', reduce_fn.__name__, f'{size}x{size}')
         
-        if not os.path.exists(pt_dir):
-            os.makedirs(pt_dir)
+        # if not os.path.exists(pt_dir):
+        #     os.makedirs(pt_dir)
 
-        # if not os.path.exists(npy_dir):
-        #     os.makedirs(npy_dir)
+        if not os.path.exists(npy_dir):
+            os.makedirs(npy_dir)
 
-        torch.save(torch.from_numpy((array - intercept).astype(np.int16)), os.path.join(pt_dir, f'{i:04}.pt'))
-        # np.save(os.path.join(npy_dir, f'{i:04}.npy'), array)
+        # torch.save(torch.from_numpy((array - intercept).astype(np.int16)), os.path.join(pt_dir, f'{i:04}.pt'))
+        np.save(os.path.join(npy_dir, f'{i:04}.npy'), array)
         
-for size in hdf5_files:
-    hdf5_files[size].close()
+# for size in hdf5_files:
+#     hdf5_files[size].close()

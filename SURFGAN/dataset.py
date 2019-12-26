@@ -10,9 +10,13 @@ class NumpyDataset:
         super(NumpyDataset, self).__init__()
         self.npy_files = glob.glob(npy_dir + '*.npy')
         print(f"Length of dataset: {len(self.npy_files)}")
+        
+        if scratch_dir[-1] == '/':
+            scratch_dir = scratch_dir[:-1]
+        
+        print(scratch_dir)
 
         self.scratch_dir = os.path.normpath(scratch_dir + npy_dir)
-
         if copy_files:
             os.makedirs(self.scratch_dir, exist_ok=True)
             print("Copying files to scratch...")

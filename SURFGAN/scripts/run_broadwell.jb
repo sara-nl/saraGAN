@@ -1,6 +1,6 @@
 #!/usr/bin/bash
-#SBATCH -N 16
-#SBATCH -n 16
+#SBATCH -N 64
+#SBATCH -n 64
 #SBATCH -p broadwell
 #SBATCH -t 0-00:01:00
 
@@ -11,10 +11,4 @@ export KMP_BLOCKTIME=0
 export KMP_AFFINITY='granularity=fine,verbose,compact,1,0'
 export TF_XLA_FLAGS=--tf_xla_cpu_global_jit
 export OMP_NUM_THREADS=16
-
-mpirun -np 64 --map-by ppr:1:node:pe=24 python -u main.py pgan /lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/ '(1, 128, 512, 512)' --starting_phase=3 --ending_phase=4 --base_dim=256 --latent_dim=256 --starting_alpha=0 --d_scaling=sqrt --g_scaling=sqrt --calc_metrics --horovod
-
-mpirun -np 64 --map-by ppr:1:node:pe=24 python -u main.py stylegan /lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/ '(1, 128, 512, 512)' --starting_phase=3 --ending_phase=4 --base_dim=256 --latent_dim=256 --starting_alpha=0 --d_scaling=sqrt --g_scaling=sqrt --calc_metrics --horovod
-
-mpirun -np 64 --map-by ppr:1:node:pe=24 python -u main.py surfgan /lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/ '(1, 128, 512, 512)' --starting_phase=3 --ending_phase=4 --base_dim=512 --latent_dim=256 --starting_alpha=0 --d_scaling=sqrt --g_scaling=sqrt --calc_metrics --horovod
-
+mpirun -np 64 --map-by ppr:1:node:pe=24 python -u main.py pgan /nfs/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 7 --ending_phase 8 --base_dim 256 --latent_dim 256 --horovod --starting_alpha 1 --continue_path '/home/davidr/projects/saraGAN/SURFGAN/runs/pgan/2019-12-22_13:03:44/model_6'

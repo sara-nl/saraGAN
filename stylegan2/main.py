@@ -521,10 +521,6 @@ if __name__ == '__main__':
         hvd.init()
         config.gpu_options.visible_device_list = str(hvd.local_rank())
 
-        os.environ['KMP_AFFINITY'] = 'granularity=fine,verbose,compact,1,0'
-        # os.environ['KMP_BLOCKTIME'] = str(1)
-        # os.environ['OMP_NUM_THREADS'] = str(16)
-
         np.random.seed(args.seed + hvd.rank())
         tf.random.set_random_seed(args.seed + hvd.rank())
         random.seed(args.seed + hvd.rank())
