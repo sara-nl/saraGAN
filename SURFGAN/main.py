@@ -13,8 +13,8 @@ from mpi4py import MPI
 import nvgpu
 import psutil
 import subprocess
-import importlib
 import os
+import importlib
 
 from tensorflow.data.experimental import AUTOTUNE
 
@@ -95,7 +95,6 @@ def main(args, config):
         z = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
         gen_sample = generator(z, alpha, phase, num_phases,
                                args.base_dim, base_shape, activation=args.activation,
-                               # is_training=True,
                                param=args.leakiness)
 
         # Discriminator Training
@@ -104,8 +103,6 @@ def main(args, config):
         disc_real = discriminator(real_image_input, alpha, phase, num_phases,
                                   args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness, is_reuse=True)
 
-        wgan_disc_loss = disc_fake_d - disc_real
-
         gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
         interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
         gradients = tf.gradients(discriminator(interpolates, alpha, phase,
@@ -113,17 +110,31 @@ def main(args, config):
                                                is_reuse=True, activation=args.activation,
                                                param=args.leakiness), [interpolates])[0]
         slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=(1, 2, 3, 4)))
-        gradient_penalty = (slopes - args.gp_center) ** 2
-        gp_loss = (args.base_gp_weight * 2 ** phase) * gradient_penalty
-
-        drift_loss = 1e-3 * disc_real ** 2
-        disc_loss = tf.reduce_mean(wgan_disc_loss + gp_loss + drift_loss)
 
         # Generator training.
         disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, args.base_dim, args.latent_dim,
                                     activation=args.activation, param=args.leakiness, is_reuse=True)
 
-        gen_loss = -tf.reduce_mean(disc_fake_g)
+        if args.loss_fn == 'wgan':
+            gradient_penalty = (slopes - 1) ** 2
+            gp_loss = args.gp_weight * gradient_penalty
+            disc_loss = disc_fake_d - disc_real
+            drift_loss = 1e-3 * disc_real ** 2
+            disc_loss = tf.reduce_mean(disc_loss + gp_loss + drift_loss)
+            gen_loss = -tf.reduce_mean(disc_fake_g)
+
+        elif args.loss_fn == 'logistic':
+            gradient_penalty = tf.reduce_mean(slopes ** 2)
+            gp_loss = args.gp_weight * gradient_penalty
+            disc_loss = tf.reduce_mean(tf.nn.softplus(disc_fake_d)) + tf.reduce_mean(
+                tf.nn.softplus(-disc_real))
+            # disc_loss = -(tf.reduce_mean(tf.math.log_sigmoid(disc_real)) + tf.reduce_mean(
+            # tf.math.log(1 - tf.math.sigmoid(disc_fake_d))))
+            disc_loss += gp_loss
+            gen_loss = tf.reduce_mean(tf.nn.softplus(-disc_fake_g))
+
+        else:
+            raise ValueError(f"Unknown loss function: {args.loss_fn}")
 
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
@@ -196,6 +207,9 @@ def main(args, config):
             tf.summary.scalar('d_loss', disc_loss)
             tf.summary.scalar('g_loss', gen_loss)
             tf.summary.scalar('gp', tf.reduce_mean(gp_loss))
+
+            if args.loss_fn == 'logistic':
+                tf.summary.scalar('convergence', (-1/2) * (disc_loss / gen_loss)
 
             tf.summary.scalar('max_g_grad_norm', max_g_norm)
             tf.summary.scalar('max_d_grad_norm', max_d_norm)
@@ -535,9 +549,9 @@ if __name__ == '__main__':
     parser.add_argument('--max_batch_size', type=int, default=128)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
-    parser.add_argument('--learning_rate', type=float, default=1e-4)
-    parser.add_argument('--gp_center', type=float, default=0)
-    parser.add_argument('--base_gp_weight', type=float, default=1)
+    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--loss_fn', default='logistic', choices=['logistic', 'wgan'])
+    parser.add_argument('--gp_weight', type=float, default=10)
     parser.add_argument('--activation', type=str, default='leaky_relu')
     parser.add_argument('--leakiness', type=float, default=0.2)
     parser.add_argument('--seed', type=int, default=42)
@@ -551,9 +565,9 @@ if __name__ == '__main__':
     parser.add_argument('--beta1', type=float, default=0)
     parser.add_argument('--beta2', type=float, default=0.99)
     parser.add_argument('--ema_beta', type=float, default=0.99)
-    parser.add_argument('--d_scaling', default='linear', choices=['linear', 'sqrt', 'none'],
+    parser.add_argument('--d_scaling', default='sqrt', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')
-    parser.add_argument('--g_scaling', default='none', choices=['linear', 'sqrt', 'none'],
+    parser.add_argument('--g_scaling', default='sqrt', choices=['linear', 'sqrt', 'none'],
                         help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
     parser.add_argument('--starting_alpha', default=1, type=float)
@@ -561,10 +575,10 @@ if __name__ == '__main__':
 
     gopts = tf.GraphOptions(place_pruned_graph=True)
     config = tf.ConfigProto(graph_options=gopts,
-                            intra_op_parallelism_threads=os.environ['OMP_NUM_THREADS'],
+                            intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
                             inter_op_parallelism_threads=2,
                             allow_soft_placement=True,
-                            device_count={'CPU': os.environ['OMP_NUM_THREADS']})
+                            device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 
     config.gpu_options.allow_growth = True
 
