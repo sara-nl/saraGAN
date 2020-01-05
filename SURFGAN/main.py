@@ -1,6 +1,5 @@
 import argparse
 import numpy as np
-import os
 import tensorflow as tf
 import horovod.tensorflow as hvd
 import time
@@ -10,9 +9,6 @@ from metrics import (get_fid_for_volumes, inception_activations, get_swd_for_vol
 from dataset import NumpyDataset
 from utils import count_parameters, image_grid, parse_tuple
 from mpi4py import MPI
-import nvgpu
-import psutil
-import subprocess
 import os
 import importlib
 
@@ -53,12 +49,13 @@ def main(args, config):
         # Get Dataset.
         size = 2 * 2 ** phase
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
-        npy_data = NumpyDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0)
+        npy_data = NumpyDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0 and phase >= args.starting_phase)
         dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
 
         # Get DataLoader
         batch_size = max(1, args.max_batch_size // ((2 ** (phase - 1)) * global_size))
-        assert batch_size * global_size <= 128
+        # batch_size = final_resolution // 2 ** (phase + 1)
+        # assert batch_size * global_size <= 128
 
         if verbose:
             print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")
@@ -182,11 +179,16 @@ def main(args, config):
             max_d_norm = tf.reduce_max(d_norms)
 
             # 128 is very large. Might want to clip lower, keep track of max norms in Tensorboard.
-            g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad, var in g_gradients]
-            d_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad, var in d_gradients]
+            # g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad,
+            # d_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad,
+            # var in d_gradients]
 
-            train_gen = optimizer_gen.apply_gradients(g_clipped_grads)
-            train_disc = optimizer_disc.apply_gradients(d_clipped_grads)
+            # train_gen = optimizer_gen.apply_gradients(g_clipped_grads)
+            # train_disc = optimizer_disc.apply_gradients(d_clipped_grads)
+
+            train_gen = optimizer_gen.apply_gradients(g_gradients)
+            train_disc = optimizer_disc.apply_gradients(d_gradients)
+
 
             # # Create training operations
             # train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
@@ -208,8 +210,14 @@ def main(args, config):
             tf.summary.scalar('g_loss', gen_loss)
             tf.summary.scalar('gp', tf.reduce_mean(gp_loss))
 
+            for g in g_gradients:
+                tf.summary.histogram(f'grad_{g[1].name}', g[0])
+
+            for g in d_gradients:
+                tf.summary.histogram(f'grad_{g[1].name}', g[0])
+
             if args.loss_fn == 'logistic':
-                tf.summary.scalar('convergence', (-1/2) * (disc_loss / gen_loss)
+                tf.summary.scalar('convergence', 2 * gen_loss /  disc_loss - 1)
 
             tf.summary.scalar('max_g_grad_norm', max_g_norm)
             tf.summary.scalar('max_d_grad_norm', max_d_norm)
@@ -282,7 +290,6 @@ def main(args, config):
             while True:
                 start = time.time()
                 if local_step % 2048 == 0 and local_step > 1:
-                    sess.run(ema_update_weights)
                     if args.horovod:
                         # Broadcast variables every 1024 gradient steps.
                         sess.run(hvd.broadcast_global_variables(0))
@@ -327,9 +334,8 @@ def main(args, config):
                 start = time.time()
                 assert alpha.eval() == 0
                 # Broadcast variables every 1024 gradient steps.
-                if local_step % 1024 == 0 and local_step > 0:
+                if local_step % 2048 == 0 and local_step > 0:
 
-                    sess.run(ema_update_weights)
                     if args.horovod:
                         sess.run(hvd.broadcast_global_variables(0))
                     saver = tf.train.Saver(var_list)
@@ -547,9 +553,9 @@ if __name__ == '__main__':
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
     parser.add_argument('--max_batch_size', type=int, default=128)
-    parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
-    parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--mixing_nimg', type=int, default=2 ** 18)
+    parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 18)
+    parser.add_argument('--learning_rate', type=float, default=5e-4)
     parser.add_argument('--loss_fn', default='logistic', choices=['logistic', 'wgan'])
     parser.add_argument('--gp_weight', type=float, default=10)
     parser.add_argument('--activation', type=str, default='leaky_relu')
@@ -565,9 +571,9 @@ if __name__ == '__main__':
     parser.add_argument('--beta1', type=float, default=0)
     parser.add_argument('--beta2', type=float, default=0.99)
     parser.add_argument('--ema_beta', type=float, default=0.99)
-    parser.add_argument('--d_scaling', default='sqrt', choices=['linear', 'sqrt', 'none'],
+    parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')
-    parser.add_argument('--g_scaling', default='sqrt', choices=['linear', 'sqrt', 'none'],
+    parser.add_argument('--g_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
     parser.add_argument('--starting_alpha', default=1, type=float)

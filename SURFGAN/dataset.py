@@ -21,8 +21,9 @@ class NumpyDataset:
             os.makedirs(self.scratch_dir, exist_ok=True)
             print("Copying files to scratch...")
             for f in self.npy_files:
-                os.path.isdir(self.scratch_dir)
-                shutil.copy(f, os.path.normpath(scratch_dir + f))
+                # os.path.isdir(self.scratch_dir)
+                if not os.path.isfile(os.path.normpath(scratch_dir + f)):
+                    shutil.copy(f, os.path.normpath(scratch_dir + f))
 
         while len(glob.glob(self.scratch_dir + '/*.npy')) < len(self.npy_files):
             time.sleep(1)

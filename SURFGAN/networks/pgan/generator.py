@@ -2,13 +2,19 @@ from networks.ops import *
 
 
 def generator_in(x, filters, shape, activation, param=None):
+
     with tf.variable_scope('dense'):
+
         x = dense(x, np.product(shape) * filters, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
     x = tf.reshape(x, [-1, filters] + list(shape))
+
     with tf.variable_scope('conv'):
-        x = conv3d(x, filters, 3, activation, param=param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+
+        x = conv3d(x, filters, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
@@ -20,13 +26,17 @@ def generator_block(x, filters_out, activation, param=None):
         x = upscale3d(x)
 
     with tf.variable_scope('conv_1'):
-        x = conv3d(x, filters_out, 3, activation, param=param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+        x = conv3d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
 
     with tf.variable_scope('conv_2'):
-        x = conv3d(x, filters_out, 3, activation, param=param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+        x = conv3d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
@@ -48,6 +58,8 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
 
             filters_out = num_filters(i, num_phases, base_dim)
             with tf.variable_scope(f'generator_block_{i}'):
+                shape = x.get_shape().as_list()[2:]
+
                 x = generator_block(x, filters_out, activation=activation, param=param)
 
         with tf.variable_scope(f'to_rgb_{phase}'):

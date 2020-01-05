@@ -4,11 +4,15 @@ import time
 
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
     with tf.variable_scope('conv_1'):
-        x = conv3d(x, filters_in, 3, activation, param=param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+        x = conv3d(x, filters_in, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
     with tf.variable_scope('conv_2'):
-        x = conv3d(x, filters_out, 3, activation, param=param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+        x = conv3d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
     x = downscale3d(x)
@@ -18,7 +22,9 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
 def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
     with tf.variable_scope(f'discriminator_out'):
         # x = minibatch_stddev_layer(x)
-        x = conv3d(x, filters_out, 3, activation=activation, param=param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+        x = conv3d(x, filters_out, kernel, activation=activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         with tf.variable_scope('dense_1'):
@@ -67,11 +73,12 @@ if __name__ == '__main__':
     num_phases = 9
     base_dim = 512
     base_shape = [1, 1, 4, 4]
+    latent_dim = 256
     for phase in range(8, 9):
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         print(shape)
         x = tf.random.normal(shape=shape)
-        y = discriminator(x, 0.5, phase, num_phases, base_dim, activation='leaky_relu', param=0.3)
+        y = discriminator(x, 0.5, phase, num_phases, base_dim, latent_dim, activation='leaky_relu', param=0.3)
 
         loss = tf.reduce_sum(y)
         optim = tf.train.GradientDescentOptimizer(1e-5)

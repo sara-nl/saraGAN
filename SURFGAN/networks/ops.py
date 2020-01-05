@@ -1,6 +1,11 @@
 import tensorflow as tf
 import numpy as np
 
+def k(x):
+    if x < 3:
+        return 1
+    else:
+        return 3
 
 def calculate_gain(activation, param=None):
     linear_fns = ['linear', 'conv1d', 'conv2d', 'conv3d', 'conv_transpose1d', 'conv_transpose2d', 'conv_transpose3d']
@@ -49,9 +54,9 @@ def dense(x, fmaps, activation, lrmul=1, param=None):
     return tf.matmul(x, w)
 
 
-def conv3d(x, fmaps, kernel, activation, param=None):
-    assert kernel >= 1 and kernel % 2 == 1
-    w = get_weight([kernel, kernel, kernel, x.shape[1].value, fmaps], activation, param=param)
+def conv3d(x, fmaps, kernel, activation, param=None, lrmul=1):
+    print(kernel)
+    w = get_weight([*kernel, x.shape[1].value, fmaps], activation, param=param, lrmul=lrmul)
     w = tf.cast(w, x.dtype)
     return tf.nn.conv3d(x, w, strides=[1, 1, 1, 1, 1], padding='SAME', data_format='NCDHW')
 
@@ -105,11 +110,11 @@ def num_filters(phase, num_phases, base_dim):
 
 
 def to_rgb(x, channels=1):
-    return apply_bias(conv3d(x, channels, 1, activation='linear'))
+    return apply_bias(conv3d(x, channels, (1, 1, 1), activation='linear'))
 
 
 def from_rgb(x, filters_out, activation, param=None):
-    x = conv3d(x, filters_out, 1, activation, param)
+    x = conv3d(x, filters_out, (1, 1, 1), activation, param)
     x = apply_bias(x)
     x = act(x, activation, param=param)
     return x

@@ -4,8 +4,9 @@
 #SBATCH -p normal --constraint=haswell
 #SBATCH -t 0-00:01:00
 
-scontrol update JobId=$SLURM_JOB_ID TimeLimit=5-00:00:00
+scontrol update JobId=$SLURM_JOB_ID TimeLimit=1-00:00:00
 source /home/davidr/tf_cpu.sh
+cd /home/davidr/projects/saraGAN/SURFGAN/
 
 export KMP_BLOCKTIME=0
 export KMP_AFFINITY='granularity=fine,verbose,compact,1,0'
@@ -14,3 +15,6 @@ export KMP_SETTINGS=TRUE
 export OMP_NUM_THREADS=24
 
 mpirun -np 128 --map-by ppr:1:node:pe=24 python -u main.py pgan /lustre4/2/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --scratch_path '/scratch-local/' --starting_phase 7 --ending_phase 8 --base_dim 256 --latent_dim 256 --horovod --starting_alpha 1 --continue_path '/nfs/home5/davidr/projects/saraGAN/SURFGAN/runs/pgan/lisa/model_6'
+
+# '/nfs/home5/davidr/projects/saraGAN/SURFGAN/runs/pgan/2019-12-27_19:37:52/model_6'
+
