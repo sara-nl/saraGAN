@@ -4,7 +4,7 @@ import tensorflow as tf
 import horovod.tensorflow as hvd
 import time
 import random
-from metrics import (get_fid_for_volumes, inception_activations, get_swd_for_volumes,
+from metrics import (calculate_fid_given_batch_volumes, get_swd_for_volumes,
                      get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
 from dataset import NumpyDataset
 from utils import count_parameters, image_grid, parse_tuple
@@ -20,9 +20,13 @@ def main(args, config):
     if args.horovod:
         verbose = hvd.rank() == 0
         global_size = hvd.size()
+        global_rank = hvd.rank()
+        local_rank = hvd.local_rank()
     else:
         verbose = True
         global_size = 1
+        global_rank = 0
+        local_rank = 0
 
     timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
     logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
@@ -49,13 +53,12 @@ def main(args, config):
         # Get Dataset.
         size = 2 * 2 ** phase
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
-        npy_data = NumpyDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0 and phase >= args.starting_phase)
+        npy_data = NumpyDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0,
+                                is_correct_phase=phase >= args.starting_phase)
         dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
 
         # Get DataLoader
         batch_size = max(1, args.max_batch_size // ((2 ** (phase - 1)) * global_size))
-        # batch_size = final_resolution // 2 ** (phase + 1)
-        # assert batch_size * global_size <= 128
 
         if verbose:
             print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")
@@ -98,7 +101,8 @@ def main(args, config):
         disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
                                     args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness)
         disc_real = discriminator(real_image_input, alpha, phase, num_phases,
-                                  args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness, is_reuse=True)
+                                  args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness,
+                                  is_reuse=True)
 
         gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
         interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
@@ -125,8 +129,6 @@ def main(args, config):
             gp_loss = args.gp_weight * gradient_penalty
             disc_loss = tf.reduce_mean(tf.nn.softplus(disc_fake_d)) + tf.reduce_mean(
                 tf.nn.softplus(-disc_real))
-            # disc_loss = -(tf.reduce_mean(tf.math.log_sigmoid(disc_real)) + tf.reduce_mean(
-            # tf.math.log(1 - tf.math.sigmoid(disc_fake_d))))
             disc_loss += gp_loss
             gen_loss = tf.reduce_mean(tf.nn.softplus(-disc_fake_g))
 
@@ -178,7 +180,6 @@ def main(args, config):
             d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
             max_d_norm = tf.reduce_max(d_norms)
 
-            # 128 is very large. Might want to clip lower, keep track of max norms in Tensorboard.
             # g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad,
             # d_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad,
             # var in d_gradients]
@@ -189,8 +190,6 @@ def main(args, config):
             train_gen = optimizer_gen.apply_gradients(g_gradients)
             train_disc = optimizer_disc.apply_gradients(d_gradients)
 
-
-            # # Create training operations
             # train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
             # train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
 
@@ -199,10 +198,6 @@ def main(args, config):
             # Transfer EMA values to original variables
             ema_update_weights = tf.group(
                 [tf.assign(var, ema.average(var)) for var in gen_vars])
-
-            if args.calc_metrics:
-                inception_images = tf.compat.v1.placeholder(tf.float32, [None, 3, None, None])
-                activations = inception_activations(inception_images)
 
         with tf.name_scope('summaries'):
             # Summaries
@@ -253,23 +248,18 @@ def main(args, config):
 
             sess.run(tf.global_variables_initializer())
 
+            var_names = [v.name for v in var_list]
+            if verbose:
+                print(f"Restoring session with {var_names} variables.")
+            trainable_variable_names = [v.name for v in tf.trainable_variables()]
+            load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
+            saver = tf.train.Saver(load_vars)
             if var_list is not None and phase > args.starting_phase:
-                var_names = [v.name for v in var_list]
-                trainable_variable_names = [v.name for v in tf.trainable_variables()]
-                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
-                saver = tf.train.Saver(load_vars)
-                if verbose:
-                    print(f"Restoring session with {var_names} variables.")
                 saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
-
             elif var_list is not None and args.continue_path and phase == args.starting_phase:
-                var_names = [v.name for v in var_list]
-                trainable_variable_names = [v.name for v in tf.trainable_variables()]
-                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
-                saver = tf.train.Saver(load_vars)
-                if verbose:
-                    print(f"Restoring session with {var_names} variables.")
                 saver.restore(sess, os.path.join(args.continue_path))
+            else:
+                raise RuntimeError("Could not restore variables.")
 
             var_list = gen_vars + disc_vars
 
@@ -387,8 +377,7 @@ def main(args, config):
 
             # Calculate metrics.
             calc_swds: bool = size >= 16
-            print(npy_data.shape)
-            calc_ssims: bool = min(npy_data.shape[1:]) >= 32
+            calc_ssims: bool = min(npy_data.shape[1:]) >= 16
 
             if args.calc_metrics:
                 fids_local = []
@@ -414,10 +403,9 @@ def main(args, config):
                     if verbose:
                         print('real min, max', real_batch.min(), real_batch.max())
                         print('fake min, max', fake_batch.min(), fake_batch.max())
-                    
-                    fid_normalization = lambda x: (256 * (((x / 1024) + 1) / 3)).astype(np.int16)
 
-                    fids_local.append(get_fid_for_volumes(sess, activations, inception_images, real_batch, fake_batch, normalize_op=fid_normalization))
+                    fids_local.append(calculate_fid_given_batch_volumes(real_batch, fake_batch, sess))
+
                     if calc_swds:
                         swds = get_swd_for_volumes(real_batch, fake_batch)
                         swds_local.append(swds)
@@ -450,9 +438,10 @@ def main(args, config):
                 if args.horovod:
                     fid = MPI.COMM_WORLD.allreduce(fid_local, op=MPI.SUM) / hvd.size()
                     psnr = MPI.COMM_WORLD.allreduce(psnr_local, op=MPI.SUM) / hvd.size()
-                    ssim = MPI.COMM_WORLD.allreduce(ssim_local, op=MPI.SUM) / hvd.size()
                     mse = MPI.COMM_WORLD.allreduce(mse_local, op=MPI.SUM) / hvd.size()
                     nrmse = MPI.COMM_WORLD.allreduce(nrmse_local, op=MPI.SUM) / hvd.size()
+                    if calc_ssims:
+                        ssim = MPI.COMM_WORLD.allreduce(ssim_local, op=MPI.SUM) / hvd.size()
                 else:
                     fid = fid_local
                     psnr = psnr_local
@@ -469,16 +458,6 @@ def main(args, config):
                     else:
                         swds = swds_local
 
-                if calc_ssims:
-                    ssims_local = np.array(ssims_local)
-                    # Average over batches
-                    ssims_local = ssims_local.mean(axis=0)
-                    if args.horovod:
-                        ssims = MPI.COMM_WORLD.allreduce(ssims_local, op=MPI.SUM) / hvd.size()
-                    else:
-                        ssims = ssims_local
-
-
                 if verbose:
                     print(f"FID: {fid:.4f}")
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='fid',
@@ -488,11 +467,6 @@ def main(args, config):
                     print(f"PSNR: {psnr:.4f}")
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='psnr',
                                                                           simple_value=psnr)]),
-                                       global_step)
-
-                    print(f"SSIM: {fid:.4f}")
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='ssim',
-                                                                          simple_value=ssim)]),
                                        global_step)
 
                     print(f"MSE: {mse:.4f}")
@@ -517,16 +491,9 @@ def main(args, config):
                                                                               simple_value=swds[
                                                                                   -1])]), global_step)
                     if calc_ssims:
-                        print(f"SWDS: {ssims}")
-                        for i in range(len(ssims))[:-1]:
-                            lod = 16 * 2 ** i
-                            writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_{lod}',
-                                                                                  simple_value=ssims[
-                                                                                      i])]),
-                                               global_step)
-                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
-                                                                              simple_value=ssims[
-                                                                                  -1])]), global_step)
+                        print(f"SSIM: {ssim}")
+                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'ssim',
+                                                                              simple_value=ssim)]), global_step)
 
             if verbose:
                 print("\n\n\n End of phase.")
@@ -553,11 +520,11 @@ if __name__ == '__main__':
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
     parser.add_argument('--max_batch_size', type=int, default=128)
-    parser.add_argument('--mixing_nimg', type=int, default=2 ** 18)
-    parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 18)
-    parser.add_argument('--learning_rate', type=float, default=5e-4)
+    parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
+    parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
+    parser.add_argument('--learning_rate', type=float, default=1e-3)
     parser.add_argument('--loss_fn', default='logistic', choices=['logistic', 'wgan'])
-    parser.add_argument('--gp_weight', type=float, default=10)
+    parser.add_argument('--gp_weight', type=float, default=1)
     parser.add_argument('--activation', type=str, default='leaky_relu')
     parser.add_argument('--leakiness', type=float, default=0.2)
     parser.add_argument('--seed', type=int, default=42)
@@ -569,7 +536,7 @@ if __name__ == '__main__':
                         type=float, help='discriminator annealing rate, 1 -> no annealing.')
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
-    parser.add_argument('--beta2', type=float, default=0.99)
+    parser.add_argument('--beta2', type=float, default=0.9)
     parser.add_argument('--ema_beta', type=float, default=0.99)
     parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')

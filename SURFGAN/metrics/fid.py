@@ -31,6 +31,8 @@ from six.moves import urllib
 import tarfile
 import sys
 
+from dataset import NumpyDataset
+
 
 def _validate_images(images, image_size):
     images = ops.convert_to_tensor(images)
@@ -447,11 +449,19 @@ def test():
         inception_images = tf.compat.v1.placeholder(tf.float32, [None, 3, None, None])
         activations = inception_activations(inception_images)
 
-        print('rand/rand+blackpatches',
-            get_fid_for_volumes(sess, activations, inception_images, rand_batch1, noise_black_patches1, normalize_op=norm_op))
+        # print('rand/rand+blackpatches',
+        #     get_fid_for_volumes(sess, activations, inception_images, rand_batch1, noise_black_patches1, normalize_op=norm_op))
 
-        print('black/rand+blackpatches',
-            get_fid_for_volumes(const_batch1, activations, inception_images, noise_black_patches1, normalize_op=norm_op))
+        # print('black/rand+blackpatches',
+        #     get_fid_for_volumes(const_batch1, activations, inception_images, noise_black_patches1, normalize_op=norm_op))
+
+        dataset = NumpyDataset('/lustre4/2/managed_datasets/LIDC-IDRI/npy/average/32x32/',
+                               scratch_dir='/scratch-local/', copy_files=True)
+
+
+        npy_files = np.stack([dataset[i] for i in range(128)])
+
+
 
 
 if __name__ == '__main__':

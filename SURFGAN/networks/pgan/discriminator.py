@@ -73,7 +73,7 @@ if __name__ == '__main__':
     num_phases = 9
     base_dim = 512
     base_shape = [1, 1, 4, 4]
-    latent_dim = 256
+    latent_dim = 512
     for phase in range(8, 9):
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         print(shape)

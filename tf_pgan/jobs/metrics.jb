@@ -1,9 +1,0 @@
-#!/bin/bash
-#SBATCH -N 1
-#SBATCH -t 24:00:00
-#SBATCH -p broadwell
-
-source /home/davidr/tf_cpu.sh
-cd /home/davidr/projects/saraGAN/tf_pgan/
-PYTHONPATH='.' python -u metrics/fid.py
-PYTHONPATH='.' python -u metrics/swd_new_3d.py

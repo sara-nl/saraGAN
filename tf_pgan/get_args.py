@@ -4,7 +4,7 @@ PARAMS = [
     ('dataset_path', ['/lustre4/2/managed_datasets/LIDC-IDRI/npy/lanczos_3d/']),
     ('final_resolution', [512]),
     ('final_zdim', [128]),
-    ('--starting_phase', [4]),
+    ('--starting_phase', [2]),
     ('--ending_phase', [4]),
     ('--base_dim', [256]),
     ('--latent_dim', [256]),
@@ -12,24 +12,21 @@ PARAMS = [
     ('--mixing_nimg', [2 ** 16]),  # Maybe half these to speed up the search?
     ('--stabilizing_nimg', [2 ** 16]),
     ('--learning_rate', [1e-3]),
-    ('--gp_center', [1, 0]),
+    ('--gp_center', [1]),
     ('--gp_weight', [10]),  # Maybe change to add 20 if computation allows.
     ('--activation', ['leaky_relu']),  # Maybe add swish or leaky celu layer.
-    ('--leakiness', [0.2]),
+    ('--leakiness', [0.3]),
     ('--seed', [42]),
     ('--horovod', ['']),
     # ('--fp16_allreduce', ['']),  # Uncomment if you want this.
     ('--calc_metrics', ['']),
-    # ('--use_ext_clf', ['']),  # Comment to disable
-    ('--g_annealing', [1]),
-    ('--d_annealing', [1]),
+    ('--use_ext_clf', ['']),  # Comment to disable
+    # ('--lr_annealing', [1, 0.999, 0.995]),
+    ('--lr_annealing', [1]),
     ('--num_metric_samples', [128]),
     ('--beta1', [0]),
-    ('--beta2', [.99]),
-    ('--d_scaling', ['sqrt']),
-    ('--g_scaling', ['sqrt']),
-    # ('--starting_alpha', [0]),
-    # ('--lr_warmup_epochs', [5])
+    ('--beta2', [0.9]),
+    ('--lr_scaling', ['none,', 'sqrt', 'linear'])
 ]
 
 PARAMS_LISTS = list(PARAMS[i][1] for i in range(len(PARAMS)))

@@ -18,3 +18,5 @@ dataset/
 interpolates/
 core.*
 *.npy
+generated_samples/
+*.pb

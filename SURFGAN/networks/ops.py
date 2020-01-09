@@ -55,7 +55,6 @@ def dense(x, fmaps, activation, lrmul=1, param=None):
 
 
 def conv3d(x, fmaps, kernel, activation, param=None, lrmul=1):
-    print(kernel)
     w = get_weight([*kernel, x.shape[1].value, fmaps], activation, param=param, lrmul=lrmul)
     w = tf.cast(w, x.dtype)
     return tf.nn.conv3d(x, w, strides=[1, 1, 1, 1, 1], padding='SAME', data_format='NCDHW')
@@ -73,6 +72,7 @@ def group_conv3d(x, filter, groups):
          for i, f in zip(inputs, filters)], axis=1)
 
     return output
+
 
 def leaky_relu(x, alpha_lr=0.2):
     with tf.variable_scope('leaky_relu'):
@@ -105,7 +105,6 @@ def act(x, activation, param=None):
 def num_filters(phase, num_phases, base_dim):
     num_downscales = int(np.log2(base_dim / 32))
     filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
-    print(filters)
     return filters
 
 

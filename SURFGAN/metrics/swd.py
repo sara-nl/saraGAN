@@ -89,8 +89,8 @@ def reconstruct_laplacian_pyramid(pyramid):
     return minibatch
 
 
-def get_swd_for_volumes(images1, images2, nhood_size=(2, 8, 8), nhoods_per_image=128, dir_repeats=4,
-                        dirs_per_repeat=128):
+def get_swd_for_volumes(images1, images2, nhood_size=(2, 8, 8), nhoods_per_image=256, dir_repeats=4,
+                        dirs_per_repeat=256):
     resolutions = []
     res = images1.shape[-1]
 
@@ -118,8 +118,6 @@ def get_swd_for_volumes(images1, images2, nhood_size=(2, 8, 8), nhoods_per_image
 
     dist = [sliced_wasserstein(dreal, dfake, dir_repeats, dirs_per_repeat) for dreal, dfake in
             zip(descriptors_real, descriptors_fake)]
-
-    dist = [d * 1e3 for d in dist]  # multiply by 10^3
 
     dist = dist + [np.mean(dist)]
 
