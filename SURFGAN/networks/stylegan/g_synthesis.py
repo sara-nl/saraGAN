@@ -1,5 +1,6 @@
 from networks.ops import *
 
+NUM_FILTERS = [1024, 1024, 1024, 256, 256, 128, 64, 32, 16]
 
 def generator_in(d_z, noise_inputs, base_dim, base_shape, activation, param=None):
 
@@ -16,7 +17,9 @@ def generator_in(d_z, noise_inputs, base_dim, base_shape, activation, param=None
         x = style_mod(x, d_z[:, 0], activation, param)
 
     with tf.variable_scope('conv'):
-        x = conv3d(x, base_dim, 3, activation, param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+        x = conv3d(x, base_dim, kernel, activation, param)
         x = apply_noise(x, noise_inputs[0], randomize_noise=True)
         x = apply_bias(x)
         x = act(x, activation, param)
@@ -31,7 +34,9 @@ def generator_block(x, filters_out, d_z, noise_inputs, layer_idx, activation, pa
         x = upscale3d(x)
 
     with tf.variable_scope('conv_1'):
-        x = conv3d(x, filters_out, 3, activation, param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+        x = conv3d(x, filters_out, kernel, activation, param)
         x = apply_noise(x, noise_inputs[layer_idx - 1], randomize_noise=True)
         x = apply_bias(x)
         x = act(x, activation, param)
@@ -39,7 +44,9 @@ def generator_block(x, filters_out, d_z, noise_inputs, layer_idx, activation, pa
         x = style_mod(x, d_z[:, layer_idx - 1], activation, param)
 
     with tf.variable_scope('conv_2'):
-        x = conv3d(x, filters_out, 3, activation, param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+        x = conv3d(x, filters_out, kernel, activation, param)
         x = apply_noise(x, noise_inputs[layer_idx - 1], randomize_noise=True)
         x = apply_bias(x)
         x = act(x, activation, param)
@@ -76,7 +83,9 @@ def g_synthesis(d_z,
                 with tf.variable_scope(f'to_rgb_{phase - 1}'):
                     x_upsample = upscale3d(to_rgb(x, channels=base_shape[0]))
 
-            filters_out = num_filters(layer_idx, num_phases, base_dim)
+            # filters_out = num_filters(layer_idx, num_phases, base_dim)
+            filters_out = NUM_FILTERS[layer_idx]
+            print('NUM FILTERS', filters_out)
             with tf.variable_scope(f'generator_block_{layer_idx}'):
                 x = generator_block(x, filters_out, d_z, noise_inputs, layer_idx, activation=activation,
                                     param=param)
@@ -93,8 +102,8 @@ def g_synthesis(d_z,
 if __name__ == '__main__':
 
     num_phases = 8
-    base_dim = 256
-    latent_size = 256
+    base_dim = 512
+    latent_size = 512
     base_shape = (1, 1, 4, 4)
 
     for phase in range(1, num_phases + 1):

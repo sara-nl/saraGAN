@@ -5,7 +5,7 @@ import time
 
 def num_filters(phase, num_phases, base_dim):
 
-    filter_list = [512, 512, 512, 512, 256, 128, 64, 64]
+    filter_list = [1024, 1024, 256, 256, 256, 128, 64, 64]
 
     # num_downscales = int(np.log2(base_dim / 64))
     # filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
@@ -15,7 +15,9 @@ def num_filters(phase, num_phases, base_dim):
 
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
     with tf.variable_scope('conv_1'):
-        x = conv3d(x, filters_out, 3, activation, param=param)
+        shape = x.get_shape().as_list()[2:]
+        kernel = [k(s) for s in shape]
+        x = conv3d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
     x = downscale3d(x)
@@ -74,8 +76,8 @@ if __name__ == '__main__':
     os.environ['OMP_NUM_THREADS'] = str(16)
 
     num_phases = 9
-    base_dim = 512
-    latent_dim = 256
+    base_dim = 1024
+    latent_dim = 1024
     base_shape = [1, 1, 4, 4]
     for phase in range(8, 9):
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))

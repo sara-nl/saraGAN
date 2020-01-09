@@ -12,6 +12,7 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
         x = apply_bias(x)
         x = act(x, activation, param=param)
     with tf.variable_scope('conv_2'):
+
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
         x = conv3d(x, filters_out, kernel, activation, param=param)
