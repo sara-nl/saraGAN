@@ -249,13 +249,16 @@ def main(args, config):
             sess.run(tf.global_variables_initializer())
 
             trainable_variable_names = [v.name for v in tf.trainable_variables()]
-            load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
-            saver = tf.train.Saver(load_vars)
+
             if var_list is not None and phase > args.starting_phase:
                 var_names = [v.name for v in var_list]
+                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
+                saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
             elif var_list is not None and args.continue_path and phase == args.starting_phase:
                 var_names = [v.name for v in var_list]
+                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
+                saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(args.continue_path))
             else:
                 raise RuntimeError("Could not restore variables.")
