@@ -14,7 +14,7 @@ def generator(z,
               base_dim,
               base_shape,
               activation,
-              is_training,
+              is_training=True,
               param=None,
               psi=0.7, truncation_layers=8, beta=0.995, style_mixing_prob=0.9,
               is_reuse=False):

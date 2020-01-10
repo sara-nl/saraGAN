@@ -212,7 +212,7 @@ def main(args, config):
                 tf.summary.histogram(f'grad_{g[1].name}', g[0])
 
             if args.loss_fn == 'logistic':
-                tf.summary.scalar('convergence', disc_real - disc_fake_d)
+                tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
 
             tf.summary.scalar('max_g_grad_norm', max_g_norm)
             tf.summary.scalar('max_d_grad_norm', max_d_norm)
@@ -522,7 +522,7 @@ if __name__ == '__main__':
     parser.add_argument('--base_dim', type=int, default=None, required=True)
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
-    parser.add_argument('--max_batch_size', type=int, default=128)
+    parser.add_argument('--max_batch_size', type=int, default=256)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
