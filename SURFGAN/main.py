@@ -212,7 +212,7 @@ def main(args, config):
                 tf.summary.histogram(f'grad_{g[1].name}', g[0])
 
             if args.loss_fn == 'logistic':
-                tf.summary.scalar('convergence', 2 * gen_loss /  disc_loss - 1)
+                tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
 
             tf.summary.scalar('max_g_grad_norm', max_g_norm)
             tf.summary.scalar('max_d_grad_norm', max_d_norm)
@@ -261,7 +261,8 @@ def main(args, config):
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(args.continue_path))
             else:
-                print("Not restoring variables.")
+                if verbose:
+                    print("Not restoring variables.")
 
             var_list = gen_vars + disc_vars
 

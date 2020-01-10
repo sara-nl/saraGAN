@@ -15,7 +15,7 @@ class NumpyDataset:
             scratch_dir = scratch_dir[:-1]
 
         self.scratch_dir = os.path.normpath(scratch_dir + npy_dir) if is_correct_phase else npy_dir
-        if copy_files:
+        if copy_files and is_correct_phase:
             os.makedirs(self.scratch_dir, exist_ok=True)
             print("Copying files to scratch...")
             for f in self.npy_files:
