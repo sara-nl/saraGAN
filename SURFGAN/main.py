@@ -521,7 +521,7 @@ if __name__ == '__main__':
     parser.add_argument('--base_dim', type=int, default=None, required=True)
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
-    parser.add_argument('--max_batch_size', type=int, default=128)
+    parser.add_argument('--max_batch_size', type=int, default=256)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--learning_rate', type=float, default=1e-3)

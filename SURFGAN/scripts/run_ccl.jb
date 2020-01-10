@@ -1,0 +1,18 @@
+#!/bin/sh
+#BSUB -o NKI_%J.out
+#BSUB -e NKI_%J.err
+#BSUB -q workq
+#BSUB -R "128*{select[clx2s8260L] span[ptile=1]}"
+
+. /panfs/users/Xdruhe/setup_environment.bash
+
+cd /panfs/users/Xdruhe/saraGAN/SURFGAN/ 
+
+export KMP_BLOCKTIME=0
+export KMP_AFFINITY='granularity=fine,verbose,compact,1,0'
+export XLA_FLAGS=--xla_hlo_profile 
+export TF_XLA_FLAGS=--tf_xla_cpu_global_jit
+export KMP_SETTINGS=TRUE
+export OMP_NUM_THREADS=48
+
+mpirun -np 1 python -u main.py surfgan '/panfs/users/Xdruhe/LIDC-IDRI/npy/average' '(1, 128, 512, 512)' --scratch_path '/' --starting_phase 3 --ending_phase 8 --base_dim 1024 --latent_dim 1024 --horovod --starting_alpha 0
