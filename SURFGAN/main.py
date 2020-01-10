@@ -261,7 +261,7 @@ def main(args, config):
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(args.continue_path))
             else:
-                raise RuntimeError("Could not restore variables.")
+                print("Not restoring variables.")
 
             var_list = gen_vars + disc_vars
 
