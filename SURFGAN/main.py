@@ -6,7 +6,7 @@ import time
 import random
 from metrics import (calculate_fid_given_batch_volumes, get_swd_for_volumes,
                      get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
-from dataset import NumpyDataset
+from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple
 from mpi4py import MPI
 import os
@@ -53,9 +53,14 @@ def main(args, config):
         # Get Dataset.
         size = 2 * 2 ** phase
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
-        npy_data = NumpyDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0,
-                                is_correct_phase=phase >= args.starting_phase)
-        dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
+        if args.horovod:
+            npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0,
+                                    is_correct_phase=phase >= args.starting_phase)
+        else:
+            npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=True,
+                                        is_correct_phase=phase >= args.starting_phase)
+        # dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
+        dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
 
         # Get DataLoader
         batch_size = max(1, args.max_batch_size // ((2 ** (phase - 1)) * global_size))
@@ -66,16 +71,22 @@ def main(args, config):
         if args.horovod:
             dataset.shard(hvd.size(), hvd.rank())
 
-        # Lay out the graph.
-        real_image_input = dataset. \
-            shuffle(len(npy_data)). \
-            batch(batch_size, drop_remainder=True). \
-            map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=AUTOTUNE). \
-            prefetch(AUTOTUNE). \
-            repeat(). \
-            make_one_shot_iterator(). \
-            get_next()
+        def load(x):
+            x = np.load(x.numpy().decode('utf-8'))[np.newaxis, ...]
+            return x
 
+        # Lay out the graph.
+        dataset = dataset.shuffle(len(npy_data))
+        dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=AUTOTUNE)
+        dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=AUTOTUNE)
+        dataset = dataset.batch(batch_size, drop_remainder=True)
+        dataset = dataset.prefetch(AUTOTUNE)
+        dataset = dataset.repeat()
+        dataset = dataset.make_one_shot_iterator()
+
+        real_image_input = dataset.get_next()
+        real_image_input = tf.ensure_shape(real_image_input, [batch_size] + list(npy_data.shape))
+        # real_image_input = real_image_input.set_shape([256, 1, 1, 4, 4])
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         with tf.variable_scope('alpha'):
