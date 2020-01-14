@@ -77,11 +77,11 @@ def main(args, config):
 
         # Lay out the graph.
         dataset = dataset.shuffle(len(npy_data))
-        dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=1)
-        dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=1)
+        dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=AUTOTUNE)
+        dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=AUTOTUNE)
         dataset = dataset.batch(batch_size, drop_remainder=True)
         dataset = dataset.repeat()
-        dataset = dataset.prefetch(1)
+        dataset = dataset.prefetch(AUTOTUNE)
         dataset = dataset.make_one_shot_iterator()
         real_image_input = dataset.get_next()
         real_image_input = tf.ensure_shape(real_image_input, [batch_size] + list(npy_data.shape))
