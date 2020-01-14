@@ -4,7 +4,7 @@ import time
 
 
 def num_filters(phase, num_phases, base_dim):
-    filter_list = [1024, 1024, 256, 256, 256, 128, 64, 64]
+    filter_list = [1024, 1024, 256, 256, 256, 256, 128, 64]
     assert num_phases == len(filter_list)
     filters = filter_list[phase - 1]
     return filters

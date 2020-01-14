@@ -20,3 +20,5 @@ core.*
 *.npy
 generated_samples/
 *.pb
+*.err
+*.out

@@ -12,6 +12,6 @@ export KMP_AFFINITY='granularity=fine,verbose,compact,1,0'
 export XLA_FLAGS=--xla_hlo_profile 
 export TF_XLA_FLAGS=--tf_xla_cpu_global_jit
 export KMP_SETTINGS=TRUE
-export OMP_NUM_THREADS=46
+export OMP_NUM_THREADS=48
 
 mpirun -np 2 python -u main.py surfgan '/panfs/users/Xdruhe/LIDC-IDRI/npy/average' '(1, 128, 512, 512)' --scratch_path '/scratch/' --starting_phase 3 --ending_phase 3 --base_dim 1024 --latent_dim 1024 --horovod --starting_alpha 0
