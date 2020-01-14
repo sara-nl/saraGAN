@@ -1,7 +1,5 @@
 from networks.ops import *
 
-NUM_FILTERS = [1024, 1024, 1024, 256, 256, 256, 128, 64, 32]
-
 def generator_in(d_z, noise_inputs, base_dim, base_shape, activation, param=None):
 
     with tf.variable_scope('constant_in'):
@@ -83,9 +81,7 @@ def g_synthesis(d_z,
                 with tf.variable_scope(f'to_rgb_{phase - 1}'):
                     x_upsample = upscale3d(to_rgb(x, channels=base_shape[0]))
 
-            # filters_out = num_filters(layer_idx, num_phases, base_dim)
-            filters_out = NUM_FILTERS[layer_idx]
-            print('NUM FILTERS', filters_out)
+            filters_out = num_filters(layer_idx, num_phases, base_dim)
             with tf.variable_scope(f'generator_block_{layer_idx}'):
                 x = generator_block(x, filters_out, d_z, noise_inputs, layer_idx, activation=activation,
                                     param=param)
@@ -102,11 +98,11 @@ def g_synthesis(d_z,
 if __name__ == '__main__':
 
     num_phases = 8
-    base_dim = 512
-    latent_size = 512
+    base_dim = 1024
+    latent_size = 1024
     base_shape = (1, 1, 4, 4)
 
-    for phase in range(1, num_phases + 1):
+    for phase in range(4, 5):
         tf.reset_default_graph()
         latents_shape = (1, phase, latent_size)
         dlatents = tf.random.normal(shape=latents_shape)

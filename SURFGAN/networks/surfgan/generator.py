@@ -2,13 +2,10 @@ import os
 from networks.ops import *
 import time
 
-filter_list = [1024, 1024, 256, 256, 256, 128, 64, 64]
 
 def num_filters(phase, num_phases, base_dim):
-
-
-    # num_downscales = int(np.log2(base_dim / 64))
-    # filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
+    filter_list = [1024, 1024, 256, 256, 256, 128, 64, 64]
+    assert num_phases == len(filter_list)
     filters = filter_list[phase - 1]
     return filters
 
@@ -19,11 +16,6 @@ def generator_in(x, filters, shape, activation, param=None):
         x = apply_bias(x)
         x = act(x, activation, param=param)
     x = tf.reshape(x, [-1, filters] + list(shape))
-    # with tf.variable_scope('conv'):
-    #     x = conv3d(x, filters, 3, activation, param=param)
-    #     x = apply_bias(x)
-    #     x = act(x, activation, param=param)
-    #     x = pixel_norm(x)
     return x
 
 
@@ -39,11 +31,6 @@ def generator_block(x, filters_out, activation, param=None):
         x = act(x, activation, param=param)
         # x = pixel_norm(x)
 
-    # with tf.variable_scope('conv_2'):
-    #     x = conv3d(x, filters_out, 3, activation, param=param)
-    #     x = apply_bias(x)
-    #     x = act(x, activation, param=param)
-    #     x = pixel_norm(x)
     return x
 
 
@@ -77,11 +64,11 @@ if __name__ == '__main__':
 
     os.environ['OMP_NUM_THREADS'] = str(16)
 
-    num_phases = 9
+    num_phases = 8
     base_dim = 1024
     latent_dim = 1024
     base_shape = [1, 1, 4, 4]
-    for phase in range(8, 9):
+    for phase in range(4, 5):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
         y = generator(x, 0.5, phase, num_phases, base_dim, base_shape, activation='leaky_relu',
@@ -98,11 +85,11 @@ if __name__ == '__main__':
         print('Total generator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('generator')))
 
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            start = time.time()
-            sess.run(train)
+        # with tf.Session() as sess:
+        #     sess.run(tf.global_variables_initializer())
+        #     start = time.time()
+        #     sess.run(train)
 
-            end = time.time()
+        #     end = time.time()
 
-            print(f"{end - start} seconds")
+        #     print(f"{end - start} seconds")

@@ -1,8 +1,6 @@
 from networks.ops import *
 import time
 
-NUM_FILTERS = [32, 64, 128, 256, 256, 256, 1024, 1024, 1024]
-
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
@@ -49,20 +47,14 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
         x_downscale = x
 
         with tf.variable_scope(f'from_rgb_{phase}'):
-            filters_out = NUM_FILTERS[-1]
-            # filters_out = num_filters(phase, num_phases, base_dim)
-            print(filters_out)
+            filters_out = num_filters(phase, num_phases, base_dim)
             x = from_rgb(x, filters_out, activation, param=param)
 
         for i in reversed(range(2, phase + 1)):
 
             with tf.variable_scope(f'discriminator_block_{i}'):
-                # filters_in = num_filters(i, num_phases, base_dim)
-                # filters_out = num_filters(i - 1, num_phases, base_dim)
-
-                filters_in = NUM_FILTERS[i]
-                filters_out = NUM_FILTERS[i - 1]
-                print(filters_in, filters_out)
+                filters_in = num_filters(i, num_phases, base_dim)
+                filters_out = num_filters(i - 1, num_phases, base_dim)
                 x = discriminator_block(x, filters_in, filters_out, activation, param=param)
 
             if i == phase:
@@ -78,11 +70,11 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
 
 
 if __name__ == '__main__':
-    num_phases = 9
+    num_phases = 8
     base_dim = 1024
     base_shape = [1, 1, 4, 4]
     latent_dim = 1024
-    for phase in range(8, 9):
+    for phase in range(4, 5):
         tf.reset_default_graph()
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         print(shape)
@@ -100,12 +92,12 @@ if __name__ == '__main__':
         print('Total discriminator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('discriminator')))
 
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            start = time.time()
-            sess.run(train)
+        # with tf.Session() as sess:
+        #     sess.run(tf.global_variables_initializer())
+        #     start = time.time()
+        #     sess.run(train)
 
-            end = time.time()
+        #     end = time.time()
 
-            print(f"{end - start} seconds")
+        #     print(f"{end - start} seconds")
 

@@ -62,7 +62,7 @@ def generator(z,
 
 if __name__ == '__main__':
 
-    num_phases = 9
+    num_phases = 8
     base_dim = 1024
     latent_dim = 1024
     base_shape = [1, 1, 4, 4]
@@ -83,11 +83,11 @@ if __name__ == '__main__':
         print('Total generator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('generator')))
 
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            start = time.time()
-            sess.run(train)
+        # with tf.Session() as sess:
+        #     sess.run(tf.global_variables_initializer())
+        #     start = time.time()
+        #     sess.run(train)
 
-            end = time.time()
+        #     end = time.time()
 
-            print(f"{end - start} seconds")
+        #     print(f"{end - start} seconds")

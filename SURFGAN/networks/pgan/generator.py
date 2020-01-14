@@ -1,13 +1,10 @@
 from networks.ops import *
 import time
 
-NUM_FILTERS = [1024, 1024, 256, 256, 256, 128, 64, 32]
 
 def generator_in(x, filters, shape, activation, param=None):
 
     with tf.variable_scope('dense'):
-        print(x.shape)
-        print(np.product(shape), filters)
         x = dense(x, np.product(shape) * filters, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
@@ -47,6 +44,7 @@ def generator_block(x, filters_out, activation, param=None):
 
 
 def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None):
+
     with tf.variable_scope('generator'):
         with tf.variable_scope('generator_in'):
             x = generator_in(x, filters=base_dim, shape=base_shape[1:], activation=activation, param=param)
@@ -58,12 +56,8 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
             if i == phase:
                 with tf.variable_scope(f'to_rgb_{phase - 1}'):
                     x_upsample = upscale3d(to_rgb(x, channels=base_shape[0]))
-
-            # filters_out = num_filters(i, num_phases, base_dim)
-            filters_out = NUM_FILTERS[i - 1]
+            filters_out = num_filters(i, num_phases, base_dim)
             with tf.variable_scope(f'generator_block_{i}'):
-                shape = x.get_shape().as_list()[2:]
-
                 x = generator_block(x, filters_out, activation=activation, param=param)
 
         with tf.variable_scope(f'to_rgb_{phase}'):
@@ -76,11 +70,11 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
 
 
 if __name__ == '__main__':
-    num_phases = 9
+    num_phases = 8
     base_dim = 1024
     latent_dim = 1024
     base_shape = [1, 1, 4, 4]
-    for phase in range(1, 2):
+    for phase in range(4, 5):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
         y = generator(x, 0.5, phase, num_phases, base_dim, base_shape, activation='leaky_relu',
@@ -97,11 +91,11 @@ if __name__ == '__main__':
         print('Total generator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('generator')))
 
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            start = time.time()
-            sess.run(train)
+        # with tf.Session() as sess:
+        #     sess.run(tf.global_variables_initializer())
+        #     start = time.time()
+        #     sess.run(train)
 
-            end = time.time()
+        #     end = time.time()
 
-            print(f"{end - start} seconds")
+        #     print(f"{end - start} seconds")

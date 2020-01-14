@@ -4,11 +4,8 @@ import time
 
 
 def num_filters(phase, num_phases, base_dim):
-
     filter_list = [1024, 1024, 256, 256, 256, 128, 64, 64]
-
-    # num_downscales = int(np.log2(base_dim / 64))
-    # filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
+    assert num_phases == len(filter_list)
     filters = filter_list[phase - 1]
     return filters
 
@@ -27,9 +24,6 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
 def discriminator_out(x, latent_dim, activation, param):
     with tf.variable_scope(f'discriminator_out'):
         # x = minibatch_stddev_layer(x)
-        # x = conv3d(x, filters_out, 3, activation=activation, param=param)
-        # x = apply_bias(x)
-        # x = act(x, activation, param=param)
         with tf.variable_scope('dense_1'):
             x = dense(x, latent_dim, activation=activation, param=param)
             x = apply_bias(x)
@@ -75,11 +69,11 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
 if __name__ == '__main__':
     os.environ['OMP_NUM_THREADS'] = str(16)
 
-    num_phases = 9
+    num_phases = 8
     base_dim = 1024
     latent_dim = 1024
     base_shape = [1, 1, 4, 4]
-    for phase in range(8, 9):
+    for phase in range(4, 5):
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         x = tf.random.normal(shape=shape)
         y = discriminator(x, 0.5, phase, num_phases, base_dim, latent_dim, activation='leaky_relu', param=0.3)
@@ -95,12 +89,12 @@ if __name__ == '__main__':
         print('Total discriminator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('discriminator')))
 
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            start = time.time()
-            sess.run(train)
+        # with tf.Session() as sess:
+        #     sess.run(tf.global_variables_initializer())
+        #     start = time.time()
+        #     sess.run(train)
 
-            end = time.time()
+        #     end = time.time()
 
-            print(f"{end - start} seconds")
+        #     print(f"{end - start} seconds")
 
