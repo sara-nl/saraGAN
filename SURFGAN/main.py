@@ -77,13 +77,12 @@ def main(args, config):
 
         # Lay out the graph.
         dataset = dataset.shuffle(len(npy_data))
-        dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=AUTOTUNE)
-        dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=AUTOTUNE)
+        dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=1)
+        dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=1)
         dataset = dataset.batch(batch_size, drop_remainder=True)
-        dataset = dataset.prefetch(AUTOTUNE)
         dataset = dataset.repeat()
+        dataset = dataset.prefetch(1)
         dataset = dataset.make_one_shot_iterator()
-
         real_image_input = dataset.get_next()
         real_image_input = tf.ensure_shape(real_image_input, [batch_size] + list(npy_data.shape))
         # real_image_input = real_image_input.set_shape([256, 1, 1, 4, 4])
@@ -533,7 +532,7 @@ if __name__ == '__main__':
     parser.add_argument('--base_dim', type=int, default=None, required=True)
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
-    parser.add_argument('--max_batch_size', type=int, default=256)
+    parser.add_argument('--max_batch_size', type=int, default=128)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--learning_rate', type=float, default=1e-3)

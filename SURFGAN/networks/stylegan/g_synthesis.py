@@ -1,6 +1,6 @@
 from networks.ops import *
 
-NUM_FILTERS = [1024, 1024, 1024, 256, 256, 128, 64, 32, 16]
+NUM_FILTERS = [1024, 1024, 1024, 256, 256, 256, 128, 64, 32]
 
 def generator_in(d_z, noise_inputs, base_dim, base_shape, activation, param=None):
 

@@ -1,7 +1,7 @@
 from networks.ops import *
 import time
 
-NUM_FILTERS = [1024, 1024, 1024, 256, 256, 128, 64, 32, 16]
+NUM_FILTERS = [32, 64, 128, 256, 256, 256, 1024, 1024, 1024]
 
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
     with tf.variable_scope('conv_1'):

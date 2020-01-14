@@ -1,7 +1,7 @@
 from networks.ops import *
 import time
 
-NUM_FILTERS = [1024, 1024, 1024, 256, 256, 256, 128, 64, 32]
+NUM_FILTERS = [1024, 1024, 256, 256, 256, 128, 64, 32]
 
 def generator_in(x, filters, shape, activation, param=None):
 
@@ -60,7 +60,7 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
                     x_upsample = upscale3d(to_rgb(x, channels=base_shape[0]))
 
             # filters_out = num_filters(i, num_phases, base_dim)
-            filters_out = NUM_FILTERS[i]
+            filters_out = NUM_FILTERS[i - 1]
             with tf.variable_scope(f'generator_block_{i}'):
                 shape = x.get_shape().as_list()[2:]
 
@@ -80,7 +80,7 @@ if __name__ == '__main__':
     base_dim = 1024
     latent_dim = 1024
     base_shape = [1, 1, 4, 4]
-    for phase in range(8, 9):
+    for phase in range(1, 2):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
         y = generator(x, 0.5, phase, num_phases, base_dim, base_shape, activation='leaky_relu',

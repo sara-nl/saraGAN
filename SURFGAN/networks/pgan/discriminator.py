@@ -1,8 +1,7 @@
 from networks.ops import *
 import time
 
-NUM_FILTERS = [1024, 1024, 1024, 256, 256, 256, 128, 64, 32]
-# NUM_FILTERS = [16, 32, 64, 128, 256, 256, 256, 512, 512]
+NUM_FILTERS = [32, 64, 128, 256, 256, 256, 1024, 1024, 1024]
 
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
     with tf.variable_scope('conv_1'):
@@ -83,7 +82,7 @@ if __name__ == '__main__':
     base_dim = 1024
     base_shape = [1, 1, 4, 4]
     latent_dim = 1024
-    for phase in range(8, 9):
+    for phase in range(1, 2):
         tf.reset_default_graph()
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         print(shape)

@@ -2,10 +2,10 @@ import os
 from networks.ops import *
 import time
 
+filter_list = [1024, 1024, 256, 256, 256, 128, 64, 64]
 
 def num_filters(phase, num_phases, base_dim):
 
-    filter_list = [1024, 1024, 256, 256, 256, 128, 64, 64]
 
     # num_downscales = int(np.log2(base_dim / 64))
     # filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
