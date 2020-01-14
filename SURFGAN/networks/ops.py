@@ -102,9 +102,16 @@ def act(x, activation, param=None):
     return x
 
 
+# def num_filters(phase, num_phases, base_dim):
+#     num_downscales = int(np.log2(base_dim / 32))
+#     filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
+#     return filters
+
+
 def num_filters(phase, num_phases, base_dim):
-    num_downscales = int(np.log2(base_dim / 32))
-    filters = min(base_dim // (2 ** (phase - num_phases + num_downscales)), base_dim)
+    filter_list = [1024, 1024, 256, 256, 256, 128, 64, 32]
+    assert num_phases == len(filter_list)
+    filters = filter_list[phase - 1]
     return filters
 
 
