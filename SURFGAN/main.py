@@ -60,10 +60,12 @@ def main(args, config):
         dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
 
         # Get DataLoader
-        batch_size = max(1, args.max_batch_size // ((2 ** (phase - 1)) * global_size))
+        batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
 
-        if verbose:
-            print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")
+        if phase >= args.starting_phase:
+            assert batch_size * global_size <= args.max_global_batch_size
+            if verbose: 
+                print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")  
 
         if args.horovod:
             dataset.shard(hvd.size(), hvd.rank())
@@ -528,7 +530,8 @@ if __name__ == '__main__':
     parser.add_argument('--base_dim', type=int, default=None, required=True)
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
-    parser.add_argument('--max_batch_size', type=int, default=128)
+    parser.add_argument('--base_batch_size', type=int, default=128, help='batch size used in phase 1')
+    parser.add_argument('--max_global_batch_size', type=int, default=128)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 17)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
