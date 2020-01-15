@@ -89,8 +89,8 @@ def reconstruct_laplacian_pyramid(pyramid):
     return minibatch
 
 
-def get_swd_for_volumes(images1, images2, nhood_size=(2, 8, 8), nhoods_per_image=256, dir_repeats=4,
-                        dirs_per_repeat=256):
+def get_swd_for_volumes(images1, images2, nhood_size=(2, 8, 8), nhoods_per_image=512, dir_repeats=8,
+                        dirs_per_repeat=512):
     resolutions = []
     res = images1.shape[-1]
 

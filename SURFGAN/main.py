@@ -53,12 +53,9 @@ def main(args, config):
         # Get Dataset.
         size = 2 * 2 ** phase
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
-        if args.horovod:
-            npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0,
+        npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=local_rank == 0,
                                     is_correct_phase=phase >= args.starting_phase)
-        else:
-            npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=True,
-                                        is_correct_phase=phase >= args.starting_phase)
+
         # dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
         dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
 
@@ -85,8 +82,7 @@ def main(args, config):
         dataset = dataset.make_one_shot_iterator()
         real_image_input = dataset.get_next()
         real_image_input = tf.ensure_shape(real_image_input, [batch_size] + list(npy_data.shape))
-        # real_image_input = real_image_input.set_shape([256, 1, 1, 4, 4])
-        real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+        # real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         with tf.variable_scope('alpha'):
             alpha = tf.Variable(1, name='alpha', dtype=tf.float32)

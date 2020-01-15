@@ -68,7 +68,7 @@ if __name__ == '__main__':
     base_dim = 1024
     latent_dim = 1024
     base_shape = [1, 1, 4, 4]
-    for phase in range(4, 5):
+    for phase in range(8, 9):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
         y = generator(x, 0.5, phase, num_phases, base_dim, base_shape, activation='leaky_relu',

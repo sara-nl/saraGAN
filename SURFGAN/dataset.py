@@ -11,9 +11,10 @@ class NumpyDataset:
         super(NumpyDataset, self).__init__()
         self.npy_files = glob.glob(npy_dir + '*.npy')
         print(f"Length of dataset: {len(self.npy_files)}")
-        
-        if scratch_dir[-1] == '/':
-            scratch_dir = scratch_dir[:-1]
+
+        if scratch_dir is not None:
+            if scratch_dir[-1] == '/':
+                scratch_dir = scratch_dir[:-1]
 
         self.scratch_dir = os.path.normpath(scratch_dir + npy_dir) if is_correct_phase else npy_dir
         if copy_files and is_correct_phase:
@@ -52,8 +53,9 @@ class NumpyPathDataset:
         self.npy_files = glob.glob(npy_dir + '*.npy')
         print(f"Length of dataset: {len(self.npy_files)}")
 
-        if scratch_dir[-1] == '/':
-            scratch_dir = scratch_dir[:-1]
+        if scratch_dir is not None:
+            if scratch_dir[-1] == '/':
+                scratch_dir = scratch_dir[:-1]
 
         self.scratch_dir = os.path.normpath(scratch_dir + npy_dir) if is_correct_phase else npy_dir
         if copy_files and is_correct_phase:
