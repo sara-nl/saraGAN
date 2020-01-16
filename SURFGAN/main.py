@@ -558,6 +558,9 @@ if __name__ == '__main__':
     parser.add_argument('--starting_alpha', default=1, type=float)
     args = parser.parse_args()
 
+    if args.architecture in ('stylegan2', 'pgan2'):
+        assert args.starting_pahse == args.ending_phase
+
     gopts = tf.GraphOptions(place_pruned_graph=True)
     config = tf.ConfigProto(graph_options=gopts,
                             intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
