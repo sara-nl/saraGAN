@@ -2,7 +2,7 @@
 #BSUB -o NKI_%J.out
 #BSUB -e NKI_%J.err
 #BSUB -q workq
-#BSUB -R "8*{select[clx2s8260L] span[ptile=1]}"
+#BSUB -R "16*{select[clx2s8260L] span[ptile=1]}"
 
 . /panfs/users/Xdruhe/setup_environment.bash
 cd /panfs/users/Xdruhe/saraGAN/SURFGAN/ 
@@ -15,6 +15,7 @@ export KMP_SETTINGS=TRUE
 export OMP_NUM_THREADS=48
 
 MODEL=surfgan
-CONTINUE_PATH=/panfs/users/Xdruhe/saraGAN/SURFGAN/runs/${MODEL}/model_3/model_3
+PHASE=5
+CONTINUE_PATH=/panfs/users/Xdruhe/saraGAN/SURFGAN/runs/${MODEL}/model_$((PHASE - 1))/model_$((PHASE - 1))
 
-mpirun -np 8 -ppn 1 python -u main.py ${MODEL} '/panfs/users/Xdruhe/LIDC-IDRI/npy/average' '(1, 128, 512, 512)' --scratch_path '/scratch/' --starting_phase 4 --ending_phase 4 --base_dim 1024 --latent_dim 1024 --horovod --starting_alpha 1 --continue_path=${CONTINUE_PATH}
+mpirun -np 16 -ppn 1 python -u main.py ${MODEL} '/panfs/users/Xdruhe/LIDC-IDRI/npy/average' '(1, 128, 512, 512)' --scratch_path '/scratch/' --starting_phase ${PHASE} --ending_phase ${PHASE} --base_dim 1024 --latent_dim 1024 --horovod --starting_alpha 1 --continue_path=${CONTINUE_PATH}
