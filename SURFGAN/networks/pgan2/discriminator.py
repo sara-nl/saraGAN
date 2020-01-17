@@ -2,6 +2,13 @@ from networks.ops import *
 import time
 
 
+def num_filters(phase, num_phases, base_dim):
+    filter_list = [512, 512, 128, 128, 128, 64, 32, 16]
+    assert num_phases == len(filter_list)
+    filters = filter_list[phase - 1]
+    return filters
+
+
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
 
     with tf.variable_scope('residual'):
@@ -70,9 +77,9 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
 
 if __name__ == '__main__':
     num_phases = 8
-    base_dim = 1024
+    base_dim = 512
     base_shape = [1, 1, 4, 4]
-    latent_dim = 1024
+    latent_dim = 512
     for phase in range(8, 9):
         tf.reset_default_graph()
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))

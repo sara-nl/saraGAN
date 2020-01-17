@@ -2,6 +2,13 @@ from networks.ops import *
 import time
 
 
+def num_filters(phase, num_phases, base_dim):
+    filter_list = [512, 512, 128, 128, 128, 64, 32, 16]
+    assert num_phases == len(filter_list)
+    filters = filter_list[phase - 1]
+    return filters
+
+
 def generator_in(x, filters, shape, activation, param=None):
 
     with tf.variable_scope('dense'):
@@ -68,8 +75,8 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
 
 if __name__ == '__main__':
     num_phases = 8
-    base_dim = 1024
-    latent_dim = 1024
+    base_dim = 512
+    latent_dim = 512
     base_shape = [1, 1, 4, 4]
     for phase in range(8, 9):
         shape = [1, latent_dim]

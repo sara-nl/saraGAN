@@ -95,11 +95,11 @@ def leaky_relu(x, alpha_lr=0.2):
 def act(x, activation, param=None):
     if activation == 'leaky_relu':
         assert param is not None
-        x = leaky_relu(x, alpha_lr=param)
-
+        return leaky_relu(x, alpha_lr=param)
+    elif activation == 'linear':
+        return x
     else:
         raise ValueError(f"Unknown activation {activation}")
-    return x
 
 
 # def num_filters(phase, num_phases, base_dim):
@@ -213,15 +213,12 @@ def instance_norm(x, epsilon=1e-8):
         return x
 
 
-def apply_noise(x, noise_var=None, randomize_noise=True):
+def apply_noise(x):
     assert len(x.shape) == 5  # NCDHW
     with tf.variable_scope('apply_noise'):
-        if noise_var is None or randomize_noise:
-            noise = tf.random_normal([tf.shape(x)[0], 1, x.shape[2], x.shape[3], x.shape[4]])
-        else:
-            noise = noise_var
-        weight = tf.get_variable('weight', shape=[x.shape[1].value], initializer=tf.initializers.zeros())
-        return x + noise * tf.reshape(weight, [1, -1, 1, 1, 1])
+        noise = tf.random_normal([tf.shape(x)[0], 1, x.shape[2], x.shape[3], x.shape[4]])
+        noise_strength = tf.get_variable('noise_strength', shape=[], initializer=tf.initializers.zeros())
+        return x + noise * noise_strength
 
 
 def style_mod(x, dlatent, activation, param=None):
@@ -236,3 +233,4 @@ def conv3d_depthwise(x, f, strides, padding):
     filters = tf.split(f, f.shape[-2], axis=-2)
     x = tf.concat([tf.nn.conv3d(i, f, strides=strides, padding=padding) for i, f in zip(x, filters)], axis=-1)
     return x
+

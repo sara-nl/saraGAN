@@ -1,6 +1,6 @@
 import tensorflow as tf
-from networks.stylegan.g_mapping import g_mapping
-from networks.stylegan.g_synthesis import g_synthesis
+from networks.stylegan2.g_mapping import g_mapping
+from networks.stylegan2.g_synthesis import g_synthesis
 import numpy as np
 import time
 
@@ -14,7 +14,7 @@ def generator(z,
               activation,
               is_training=True,
               param=None,
-              truncation_psi=0.7, truncation_layers=8, beta=0.995, style_mixing_prob=0.9,
+              truncation_psi=None, truncation_layers=8, beta=0.995, style_mixing_prob=0.9,
               is_reuse=False):
 
     with tf.variable_scope('generator') as scope:
@@ -37,7 +37,7 @@ def generator(z,
             z_reg = tf.random_normal(tf.shape(z))
             d_z_reg = g_mapping(z_reg, phase, is_reuse=True)
 
-            layer_idx = np.arange(phase * 2)[np.newaxis, :, np.newaxis]
+            layer_idx = np.arange(phase * 3 - 2)[np.newaxis, :, np.newaxis]
 
             mixing_cutoff = tf.cond(
                 tf.random_uniform([], 0.0, 1.0) < style_mixing_prob,
@@ -49,7 +49,7 @@ def generator(z,
         # Apply truncation trick.
         if truncation_psi is not None:
             with tf.variable_scope('truncation'):
-                layer_idx = np.arange(phase * 2)[np.newaxis, :, np.newaxis]
+                layer_idx = np.arange(phase * 3 - 2)[np.newaxis, :, np.newaxis]
                 ones = np.ones(layer_idx.shape, dtype=np.float32)
                 coefs = tf.where(layer_idx < truncation_layers, truncation_psi * ones, ones)
                 d_z = coefs * d_z + (1 - coefs) * d_z_avg
@@ -65,7 +65,7 @@ if __name__ == '__main__':
     base_dim = 1024
     latent_dim = 1024
     base_shape = [1, 1, 4, 4]
-    for phase in range(8, 9):
+    for phase in range(1, 2):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
         y = generator(x, 0.5, phase, num_phases, base_dim, base_shape, activation='leaky_relu',

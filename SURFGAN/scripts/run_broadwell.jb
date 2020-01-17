@@ -5,10 +5,13 @@
 #SBATCH -t 0-00:01:00
 
 scontrol update JobId=$SLURM_JOB_ID TimeLimit=5-00:00:00
-source /home/davidr/tf_cpu.sh
+. /home/davidr/tf_cpu36.sh
+cd /home/davidr/projects/saraGAN/SURFGAN/
 
 export KMP_BLOCKTIME=0
 export KMP_AFFINITY='granularity=fine,verbose,compact,1,0'
 export TF_XLA_FLAGS=--tf_xla_cpu_global_jit
+export KMP_SETTINGS=TRUE
 export OMP_NUM_THREADS=16
-mpirun -np 64 --map-by ppr:1:node:pe=24 python -u main.py pgan /nfs/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 7 --ending_phase 8 --base_dim 256 --latent_dim 256 --horovod --starting_alpha 1 --continue_path '/home/davidr/projects/saraGAN/SURFGAN/runs/pgan/2019-12-22_13:03:44/model_6'
+
+mpirun -np 64 -ppn 1 python -u main.py pgan2 /lustre4/2/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --scratch_path '/' --starting_phase 6 --ending_phase 6 --base_dim 512 --latent_dim 512 --horovod --starting_alpha 0 --base_batch_size 64
