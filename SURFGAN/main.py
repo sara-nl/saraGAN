@@ -556,19 +556,24 @@ if __name__ == '__main__':
                         help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
     parser.add_argument('--starting_alpha', default=1, type=float)
+    parser.add_argument('--gpu', default=False, type=bool)
     args = parser.parse_args()
 
     if args.architecture in ('stylegan2', 'pgan2'):
         assert args.starting_phase == args.ending_phase
 
     gopts = tf.GraphOptions(place_pruned_graph=True)
-    config = tf.ConfigProto(graph_options=gopts,
-                            intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
-                            inter_op_parallelism_threads=2,
-                            allow_soft_placement=True,
-                            device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 
-    config.gpu_options.allow_growth = True
+    if args.gpu:
+        config = tf.ConfigProto(graph_options=gopts, allow_soft_placement=True)
+        config.gpu_options.allow_growth = True
+
+    else:
+        config = tf.ConfigProto(graph_options=gopts,
+                                intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
+                                inter_op_parallelism_threads=2,
+                                allow_soft_placement=True,
+                                device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 
     discriminator = importlib.import_module(f'networks.{args.architecture}.discriminator').discriminator
     generator = importlib.import_module(f'networks.{args.architecture}.generator').generator
