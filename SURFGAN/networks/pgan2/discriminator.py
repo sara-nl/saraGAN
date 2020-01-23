@@ -98,12 +98,12 @@ if __name__ == '__main__':
         print('Total discriminator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('discriminator')))
 
-        # with tf.Session() as sess:
-        #     sess.run(tf.global_variables_initializer())
-        #     start = time.time()
-        #     sess.run(train)
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            start = time.time()
+            sess.run(train)
 
-        #     end = time.time()
+            end = time.time()
 
-        #     print(f"{end - start} seconds")
+            print(f"{end - start} seconds")
 

@@ -9,9 +9,10 @@ from metrics import (calculate_fid_given_batch_volumes, get_swd_for_volumes,
                      get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
 from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple
-from mpi4py import MPI
+# from mpi4py import MPI
 import os
 import importlib
+from rectified_adam import RAdamOptimizer
 
 from tensorflow.data.experimental import AUTOTUNE
 
@@ -77,8 +78,8 @@ def main(args, config):
 
         # Lay out the graph.
         dataset = dataset.shuffle(len(npy_data))
-        dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=AUTOTUNE)
-        dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=AUTOTUNE)
+        dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=int(os.environ['OMP_NUM_THREADS']))
+        dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=int(os.environ['OMP_NUM_THREADS']))
         dataset = dataset.batch(batch_size, drop_remainder=True)
         dataset = dataset.repeat()
         dataset = dataset.prefetch(AUTOTUNE)
@@ -174,8 +175,24 @@ def main(args, config):
                 else:
                     raise ValueError(args.d_scaling)
 
-            optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-            optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+            # optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+            # optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+            # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
+            # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
+            # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
+            # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
+
+            d_lr = tf.Variable(args.learning_rate, name='d_lr', dtype=tf.float32)
+            g_lr = tf.Variable(args.learning_rate, name='g_lr', dtype=tf.float32)
+            lr_step = tf.Variable(0, name='step', dtype=tf.float32)
+
+            update_step = lr_step.assign_add(1.0)
+            with tf.control_dependencies([update_step]):
+                update_g_lr = g_lr.assign(g_lr * args.g_annealing)
+                update_d_lr = d_lr.assign(d_lr * args.d_annealing)
+
+            optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+            optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
             if args.horovod:
                 optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum if args.use_adasum else hvd.Average)
@@ -220,8 +237,7 @@ def main(args, config):
             for g in d_gradients:
                 tf.summary.histogram(f'grad_{g[1].name}', g[0])
 
-            if args.loss_fn == 'logistic':
-                tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
+            tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
 
             tf.summary.scalar('max_g_grad_norm', max_g_norm)
             tf.summary.scalar('max_d_grad_norm', max_d_norm)
@@ -346,6 +362,8 @@ def main(args, config):
 
                 sess.run(update_alpha)
                 sess.run(ema_op)
+                sess.run(update_d_lr)
+                sess.run(update_g_lr)
 
                 assert alpha.eval() >= 0
 
@@ -595,7 +613,7 @@ if __name__ == '__main__':
     else:
         config = tf.ConfigProto(graph_options=gopts,
                                 intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
-                                inter_op_parallelism_threads=2,
+                                inter_op_parallelism_threads=4,
                                 allow_soft_placement=True,
                                 device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 
