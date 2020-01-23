@@ -1,11 +1,11 @@
 from networks.ops import *
 import time
 
-# def num_filters(phase, num_phases, base_dim):
-#     filter_list = [512, 512, 128, 128, 128, 64, 32, 16]
-#     assert num_phases == len(filter_list)
-#     filters = filter_list[phase - 1]
-#     return filters
+def num_filters(phase, num_phases, base_dim):
+    filter_list = [512, 512, 128, 128, 128, 64, 32, 16]
+    assert num_phases == len(filter_list)
+    filters = filter_list[phase - 1]
+    return filters
 
 
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
