@@ -43,7 +43,7 @@ def generator_block(x, filters_out, activation, param=None):
     return x
 
 
-def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None):
+def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None, size='medium'):
 
     with tf.variable_scope('generator'):
         with tf.variable_scope('generator_in'):
@@ -56,7 +56,7 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
             if i == phase:
                 with tf.variable_scope(f'to_rgb_{phase - 1}'):
                     x_upsample = upscale3d(to_rgb(x, channels=base_shape[0]))
-            filters_out = num_filters(i, num_phases, base_dim)
+            filters_out = num_filters(i, num_phases, base_dim, size=size)
             with tf.variable_scope(f'generator_block_{i}'):
                 x = generator_block(x, filters_out, activation=activation, param=param)
 

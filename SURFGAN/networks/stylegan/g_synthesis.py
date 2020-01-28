@@ -60,7 +60,8 @@ def g_synthesis(d_z,
                 base_dim,
                 base_shape,
                 activation,
-                param=None):
+                param=None,
+                size='medium'):
 
     with tf.variable_scope('g_synthesis'):
 
@@ -74,7 +75,7 @@ def g_synthesis(d_z,
                 with tf.variable_scope(f'to_rgb_{phase - 1}'):
                     x_upsample = upscale3d(to_rgb(x, channels=base_shape[0]))
 
-            filters_out = num_filters(layer_idx, num_phases, base_dim)
+            filters_out = num_filters(layer_idx, num_phases, base_dim, size=size)
             with tf.variable_scope(f'generator_block_{layer_idx}'):
                 x = generator_block(x, filters_out, d_z, layer_idx, activation=activation,
                                     param=param)
