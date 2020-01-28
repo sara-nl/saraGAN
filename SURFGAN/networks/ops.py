@@ -108,8 +108,15 @@ def act(x, activation, param=None):
 #     return filters
 
 
-def num_filters(phase, num_phases, base_dim):
-    filter_list = [1024, 1024, 256, 256, 256, 128, 64, 32]
+def num_filters(phase, num_phases, base_dim=None, size=None):
+    if size == 'small':
+        filter_list = [256, 256, 64, 64, 64, 32, 16, 8]
+    elif size == 'medium':
+        filter_list = [512, 512, 128, 128, 128, 64, 32, 16]
+    elif size == 'big':
+        filter_list = [1024, 1024, 256, 256, 256, 128, 64, 32]
+    else:
+        raise ValueError(f"Unknown size: {size}")
     assert num_phases == len(filter_list)
     filters = filter_list[phase - 1]
     return filters
