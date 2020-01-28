@@ -556,7 +556,7 @@ if __name__ == '__main__':
                         help='How to scale generator learning rate with horovod size.')
     parser.add_argument('--continue_path', default=None, type=str)
     parser.add_argument('--starting_alpha', default=1, type=float)
-    parser.add_argument('--gpu', default=False, type=bool)
+    parser.add_argument('--gpu', default=False, action='store_true')
     args = parser.parse_args()
 
     if args.architecture in ('stylegan2', 'pgan2'):
@@ -580,7 +580,8 @@ if __name__ == '__main__':
 
     if args.horovod:
         hvd.init()
-        config.gpu_options.visible_device_list = str(hvd.local_rank())
+        if args.gpu:
+            config.gpu_options.visible_device_list = str(hvd.local_rank())
 
         np.random.seed(args.seed + hvd.rank())
         tf.random.set_random_seed(args.seed + hvd.rank())

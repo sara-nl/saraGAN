@@ -5,10 +5,6 @@
 #SBATCH -p gpu_titanrtx
 #SBATCH -t 5-00:00:00
 
-source /home/davidr/tf_gpu36.sh
+. /home/davidr/tf_gpu36.sh
 cd /home/davidr/projects/saraGAN/SURFGAN/
-export OMP_NUM_THREADS=16
-
-mpirun -n 8 -npernode 4 python -u main.py pgan /nfs/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 3 --ending_phase 8 --base_dim 256 --latent_dim 256 --horovod --starting_alpha 0 --scratch_path /scratch
-
-# --continue_path '/home/davidr/projects/saraGAN/SURFGAN/runs/pgan/2019-12-22_13:03:44/model_5'
+mpirun -n 8 -npernode 4 python -u main.py pgan /nfs/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 3 --ending_phase 3 --base_dim 1024 --latent_dim 1024 --horovod --starting_alpha 0 --scratch_path /scratch --gpu
