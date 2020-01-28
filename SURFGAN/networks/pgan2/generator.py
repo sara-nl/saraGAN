@@ -2,8 +2,6 @@ from networks.ops import *
 import time
 
 
-
-
 def generator_in(x, filters, shape, activation, param=None):
 
     with tf.variable_scope('dense'):
@@ -45,11 +43,15 @@ def generator_block(x, filters_out, activation, param=None):
     return x
 
 
-def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None, size='medium'):
+def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None, size='medium', is_reuse=False):
 
     channels = base_shape[0]
 
-    with tf.variable_scope('generator'):
+    with tf.variable_scope('generator') as scope:
+
+        if is_reuse:
+            scope.reuse_variables()
+
         with tf.variable_scope('generator_in'):
             x = generator_in(x, filters=base_dim, shape=base_shape[1:], activation=activation, param=param)
 

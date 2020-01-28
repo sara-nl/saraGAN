@@ -13,6 +13,7 @@ from utils import count_parameters, image_grid, parse_tuple
 import os
 import importlib
 from rectified_adam import RAdamOptimizer
+from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
 
 from tensorflow.data.experimental import AUTOTUNE
 
@@ -52,7 +53,10 @@ def main(args, config):
     for phase in range(1, num_phases + 1):
 
         tf.reset_default_graph()
-        # Get Dataset.
+
+        # ------------------------------------------------------------------------------------------#
+        # DATASET
+
         size = 2 * 2 ** phase
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
         npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=local_rank == 0,
@@ -76,7 +80,6 @@ def main(args, config):
             x = np.load(x.decode())[np.newaxis, ...].astype(np.float32) / 1024 - 1
             return x
 
-        # Lay out the graph.
         if args.gpu:
             parallel_calls = AUTOTUNE
         else:
@@ -94,6 +97,61 @@ def main(args, config):
         real_image_input = tf.ensure_shape(real_image_input, [batch_size] + list(npy_data.shape))
         # real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
+        # ------------------------------------------------------------------------------------------#
+        # OPTIMIZERS
+
+        g_lr = args.learning_rate
+        d_lr = args.learning_rate
+
+        if args.horovod:
+            if args.g_scaling == 'sqrt':
+                g_lr = g_lr * np.sqrt(hvd.size())
+            elif args.g_scaling == 'linear':
+                g_lr = g_lr * hvd.size()
+            elif args.g_scaling == 'none':
+                pass
+            else:
+                raise ValueError(args.g_scaling)
+
+            if args.d_scaling == 'sqrt':
+                d_lr = d_lr * np.sqrt(hvd.size())
+            elif args.d_scaling == 'linear':
+                d_lr = d_lr * hvd.size()
+            elif args.d_scaling == 'none':
+                pass
+            else:
+                raise ValueError(args.d_scaling)
+
+        # optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        # optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+        # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
+        # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
+        # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
+        # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
+
+        d_lr = tf.Variable(args.learning_rate, name='d_lr', dtype=tf.float32)
+        g_lr = tf.Variable(args.learning_rate, name='g_lr', dtype=tf.float32)
+        lr_step = tf.Variable(0, name='step', dtype=tf.float32)
+
+        update_step = lr_step.assign_add(1.0)
+        with tf.control_dependencies([update_step]):
+            update_g_lr = g_lr.assign(g_lr * args.g_annealing)
+            update_d_lr = d_lr.assign(d_lr * args.d_annealing)
+
+        optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+
+        if args.horovod:
+            try:
+                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum if args.use_adasum else hvd.Average)
+                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum if args.use_adasum else hvd.Average)
+            except AttributeError:
+                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
+                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
+
+        # ------------------------------------------------------------------------------------------#
+        # NETWORKS
+
         with tf.variable_scope('alpha'):
             alpha = tf.Variable(1, name='alpha', dtype=tf.float32)
             # Alpha init
@@ -104,111 +162,29 @@ def main(args, config):
             alpha_update = 1 / num_steps
             # noinspection PyTypeChecker
             update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
-
         zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
         base_shape = (1, zdim_base, 4, 4)
 
-        z = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
-        gen_sample = generator(z, alpha, phase, num_phases,
-                               args.base_dim, base_shape, activation=args.activation,
-                               param=args.leakiness, size=args.network_size)
+        if args.optim_strategy == 'simultaneous':
+            gen_loss, disc_loss, gp_loss, gen_sample = forward_simultaneous(
+                generator,
+                discriminator,
+                real_image_input,
+                args.latent_dim,
+                alpha,
+                phase,
+                num_phases,
+                args.base_dim,
+                base_shape,
+                args.activation,
+                args.leakiness,
+                args.network_size,
+                args.loss_fn,
+                args.gp_weight
+            )
 
-        # Discriminator Training
-        disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
-                                    args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness,
-                                    size=args.network_size)
-        disc_real = discriminator(real_image_input, alpha, phase, num_phases,
-                                  args.base_dim, args.latent_dim, activation=args.activation, param=args.leakiness,
-                                  is_reuse=True, size=args.network_size)
-
-        gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
-        interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
-        gradients = tf.gradients(discriminator(interpolates, alpha, phase,
-                                               num_phases, args.base_dim, args.latent_dim,
-                                               is_reuse=True, activation=args.activation,
-                                               param=args.leakiness, size=args.network_size), [interpolates])[0]
-        slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=(1, 2, 3, 4)))
-
-        # Generator training.
-        disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, args.base_dim, args.latent_dim,
-                                    activation=args.activation, param=args.leakiness, size=args.network_size, is_reuse=True)
-
-        if args.loss_fn == 'wgan':
-            gradient_penalty = (slopes - 1) ** 2
-            gp_loss = args.gp_weight * gradient_penalty
-            disc_loss = disc_fake_d - disc_real
-            drift_loss = 1e-3 * disc_real ** 2
-            disc_loss = tf.reduce_mean(disc_loss + gp_loss + drift_loss)
-            gen_loss = -tf.reduce_mean(disc_fake_g)
-
-        elif args.loss_fn == 'logistic':
-            gradient_penalty = tf.reduce_mean(slopes ** 2)
-            gp_loss = args.gp_weight * gradient_penalty
-            disc_loss = tf.reduce_mean(tf.nn.softplus(disc_fake_d)) + tf.reduce_mean(
-                tf.nn.softplus(-disc_real))
-            disc_loss += gp_loss
-            gen_loss = tf.reduce_mean(tf.nn.softplus(-disc_fake_g))
-
-        else:
-            raise ValueError(f"Unknown loss function: {args.loss_fn}")
-
-        if verbose:
-            print(f"Generator parameters: {count_parameters('generator')}")
-            print(f"Discriminator parameters:: {count_parameters('discriminator')}")
-        gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
-        disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-
-        # Build Optimizers
-        with tf.variable_scope('optim_ops'):
-            g_lr = args.learning_rate
-            d_lr = args.learning_rate
-
-            if args.horovod:
-                if args.g_scaling == 'sqrt':
-                    g_lr = g_lr * np.sqrt(hvd.size())
-                elif args.g_scaling == 'linear':
-                    g_lr = g_lr * hvd.size()
-                elif args.g_scaling == 'none':
-                    pass
-                else:
-                    raise ValueError(args.g_scaling)
-
-                if args.d_scaling == 'sqrt':
-                    d_lr = d_lr * np.sqrt(hvd.size())
-                elif args.d_scaling == 'linear':
-                    d_lr = d_lr * hvd.size()
-                elif args.d_scaling == 'none':
-                    pass
-                else:
-                    raise ValueError(args.d_scaling)
-
-            # optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-            # optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
-            # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
-            # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
-            # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
-            # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
-
-            d_lr = tf.Variable(args.learning_rate, name='d_lr', dtype=tf.float32)
-            g_lr = tf.Variable(args.learning_rate, name='g_lr', dtype=tf.float32)
-            lr_step = tf.Variable(0, name='step', dtype=tf.float32)
-
-            update_step = lr_step.assign_add(1.0)
-            with tf.control_dependencies([update_step]):
-                update_g_lr = g_lr.assign(g_lr * args.g_annealing)
-                update_d_lr = d_lr.assign(d_lr * args.d_annealing)
-
-            optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-            optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
-
-            if args.horovod:
-                try:
-                    optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum if args.use_adasum else hvd.Average)
-                    optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum if args.use_adasum else hvd.Average)
-                except AttributeError:
-                    optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
-                    optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
- 
+            gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+            disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
 
             g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
             d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
@@ -218,24 +194,76 @@ def main(args, config):
             d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
             max_d_norm = tf.reduce_max(d_norms)
 
-            # g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad,
-            # d_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad,
-            # var in d_gradients]
-
+            # g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad, var in g_gradients]
             # train_gen = optimizer_gen.apply_gradients(g_clipped_grads)
-            # train_disc = optimizer_disc.apply_gradients(d_clipped_grads)
-
             train_gen = optimizer_gen.apply_gradients(g_gradients)
             train_disc = optimizer_disc.apply_gradients(d_gradients)
 
-            # train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
-            # train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
+        elif args.optim_strategy == 'alternate':
 
-            ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
-            ema_op = ema.apply(gen_vars)
-            # Transfer EMA values to original variables
-            ema_update_weights = tf.group(
-                [tf.assign(var, ema.average(var)) for var in gen_vars])
+            disc_loss, gp_loss = forward_discriminator(
+                generator,
+                discriminator,
+                real_image_input,
+                args.latent_dim,
+                alpha,
+                phase,
+                num_phases,
+                args.base_dim,
+                base_shape,
+                args.activation,
+                args.leakiness,
+                args.network_size,
+                args.loss_fn,
+                args.gp_weight
+            )
+
+            disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
+            d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
+            d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
+            max_d_norm = tf.reduce_max(d_norms)
+
+            train_disc = optimizer_disc.apply_gradients(d_gradients)
+
+            with tf.control_dependencies([train_disc]):
+                gen_sample, gen_loss = forward_generator(
+                    generator,
+                    discriminator,
+                    real_image_input,
+                    args.latent_dim,
+                    alpha,
+                    phase,
+                    num_phases,
+                    args.base_dim,
+                    base_shape,
+                    args.activation,
+                    args.leakiness,
+                    args.network_size,
+                    args.loss_fn,
+                    is_reuse=True
+                )
+
+                gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+                g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
+                g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
+                max_g_norm = tf.reduce_max(g_norms)
+                train_gen = optimizer_gen.apply_gradients(g_gradients)
+
+        else:
+            raise ValueError("Unknown optim strategy ", args.optim_strategy)
+
+        if verbose:
+            print(f"Generator parameters: {count_parameters('generator')}")
+            print(f"Discriminator parameters:: {count_parameters('discriminator')}")
+
+        # train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
+        # train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
+
+        ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
+        ema_op = ema.apply(gen_vars)
+        # Transfer EMA values to original variables
+        ema_update_weights = tf.group(
+            [tf.assign(var, ema.average(var)) for var in gen_vars])
 
         with tf.name_scope('summaries'):
             # Summaries
@@ -249,7 +277,7 @@ def main(args, config):
             for g in d_gradients:
                 tf.summary.histogram(f'grad_{g[1].name}', g[0])
 
-            tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
+            # tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
 
             tf.summary.scalar('max_g_grad_norm', max_g_norm)
             tf.summary.scalar('max_d_grad_norm', max_d_norm)
@@ -612,6 +640,7 @@ if __name__ == '__main__':
     parser.add_argument('--starting_alpha', default=1, type=float)
     parser.add_argument('--gpu', default=False, action='store_true')
     parser.add_argument('--use_adasum', default=False, action='store_true')
+    parser.add_argument('--optim_strategy', default='simultaneous', choices=['simultaneous', 'alternate'])
     args = parser.parse_args()
 
     if args.network_size == 'small':
