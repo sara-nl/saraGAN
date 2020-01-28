@@ -1,3 +1,4 @@
+# pylint: disable=import-error
 import argparse
 import numpy as np
 import tensorflow as tf
@@ -8,9 +9,10 @@ from metrics import (calculate_fid_given_batch_volumes, get_swd_for_volumes,
                      get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
 from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple
-from mpi4py import MPI
+# from mpi4py import MPI
 import os
 import importlib
+from rectified_adam import RAdamOptimizer
 
 from tensorflow.data.experimental import AUTOTUNE
 
@@ -20,12 +22,12 @@ def main(args, config):
     if args.horovod:
         verbose = hvd.rank() == 0
         global_size = hvd.size()
-        global_rank = hvd.rank()
+        # global_rank = hvd.rank()
         local_rank = hvd.local_rank()
     else:
         verbose = True
         global_size = 1
-        global_rank = 0
+        # global_rank = 0
         local_rank = 0
 
     timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
@@ -44,7 +46,7 @@ def main(args, config):
     final_resolution = final_shape[-1]
     num_phases = int(np.log2(final_resolution) - 1)
 
-    var_list = None
+    var_list = list()
     global_step = 0
 
     for phase in range(1, num_phases + 1):
@@ -64,8 +66,8 @@ def main(args, config):
 
         if phase >= args.starting_phase:
             assert batch_size * global_size <= args.max_global_batch_size
-            if verbose: 
-                print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")  
+            if verbose:
+                print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")
 
         if args.horovod:
             dataset.shard(hvd.size(), hvd.rank())
@@ -76,8 +78,8 @@ def main(args, config):
 
         # Lay out the graph.
         dataset = dataset.shuffle(len(npy_data))
-        dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=AUTOTUNE)
-        dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=AUTOTUNE)
+        dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=int(os.environ['OMP_NUM_THREADS']))
+        dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=int(os.environ['OMP_NUM_THREADS']))
         dataset = dataset.batch(batch_size, drop_remainder=True)
         dataset = dataset.repeat()
         dataset = dataset.prefetch(AUTOTUNE)
@@ -173,12 +175,28 @@ def main(args, config):
                 else:
                     raise ValueError(args.d_scaling)
 
-            optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-            optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+            # optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+            # optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+            # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
+            # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
+            # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
+            # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
+
+            d_lr = tf.Variable(args.learning_rate, name='d_lr', dtype=tf.float32)
+            g_lr = tf.Variable(args.learning_rate, name='g_lr', dtype=tf.float32)
+            lr_step = tf.Variable(0, name='step', dtype=tf.float32)
+
+            update_step = lr_step.assign_add(1.0)
+            with tf.control_dependencies([update_step]):
+                update_g_lr = g_lr.assign(g_lr * args.g_annealing)
+                update_d_lr = d_lr.assign(d_lr * args.d_annealing)
+
+            optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+            optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
             if args.horovod:
-                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
-                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
+                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum if args.use_adasum else hvd.Average)
+                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum if args.use_adasum else hvd.Average)
 
             g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
             d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
@@ -219,8 +237,7 @@ def main(args, config):
             for g in d_gradients:
                 tf.summary.histogram(f'grad_{g[1].name}', g[0])
 
-            if args.loss_fn == 'logistic':
-                tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
+            tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
 
             tf.summary.scalar('max_g_grad_norm', max_g_norm)
             tf.summary.scalar('max_d_grad_norm', max_d_norm)
@@ -258,14 +275,18 @@ def main(args, config):
 
             trainable_variable_names = [v.name for v in tf.trainable_variables()]
 
-            if var_list is not None and phase > args.starting_phase:
+            if len(var_list) > 0 and phase > args.starting_phase:
                 var_names = [v.name for v in var_list]
-                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
+                load_vars = [sess.graph.get_tensor_by_name(
+                    n) for n in var_names if n in trainable_variable_names]
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
-            elif var_list is not None and args.continue_path and phase == args.starting_phase:
+            elif (len(var_list) > 0 is not None
+                  and args.continue_path
+                  and phase == args.starting_phase):
                 var_names = [v.name for v in var_list]
-                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
+                load_vars = [sess.graph.get_tensor_by_name(
+                    n) for n in var_names if n in trainable_variable_names]
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(args.continue_path))
             else:
@@ -288,6 +309,10 @@ def main(args, config):
                 sess.run(hvd.broadcast_global_variables(0))
 
             local_step = 0
+            sess.graph.finalize()
+
+            take_first_snapshot = True
+
             while True:
                 start = time.time()
                 if local_step % 2048 == 0 and local_step > 1:
@@ -317,12 +342,28 @@ def main(args, config):
                           f"g_loss {g_loss:.4f} \t "
                           f"alpha {alpha.eval():.2f}")
 
-                if global_step >= (phase - args.starting_phase) * (args.mixing_nimg + args.stabilizing_nimg) \
-                        + args.mixing_nimg:
+                    # if take_first_snapshot:
+                    #     import tracemalloc
+                    #     tracemalloc.start()
+                    #     snapshot_first = tracemalloc.take_snapshot()
+                    #     take_first_snapshot = False
+
+                    # snapshot = tracemalloc.take_snapshot()
+                    # top_stats = snapshot.compare_to(snapshot_first, 'lineno')
+                    # print("[ Top 10 differences ]")
+                    # for stat in top_stats[:10]:
+                    #     print(stat)
+                    # snapshot_prev = snapshot
+
+                if global_step >= ((phase - args.starting_phase)
+                                   * (args.mixing_nimg + args.stabilizing_nimg)
+                                   + args.mixing_nimg):
                     break
 
                 sess.run(update_alpha)
                 sess.run(ema_op)
+                sess.run(update_d_lr)
+                sess.run(update_g_lr)
 
                 assert alpha.eval() >= 0
 
@@ -557,6 +598,7 @@ if __name__ == '__main__':
     parser.add_argument('--continue_path', default=None, type=str)
     parser.add_argument('--starting_alpha', default=1, type=float)
     parser.add_argument('--gpu', default=False, action='store_true')
+    parser.add_argument('--use_adasum', default=False, action='store_true')
     args = parser.parse_args()
 
     if args.architecture in ('stylegan2', 'pgan2'):
@@ -571,7 +613,7 @@ if __name__ == '__main__':
     else:
         config = tf.ConfigProto(graph_options=gopts,
                                 intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
-                                inter_op_parallelism_threads=2,
+                                inter_op_parallelism_threads=4,
                                 allow_soft_placement=True,
                                 device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 
