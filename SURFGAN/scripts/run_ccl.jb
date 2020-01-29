@@ -2,7 +2,8 @@
 #BSUB -o NKI_%J.out
 #BSUB -e NKI_%J.err
 #BSUB -q workq
-#BSUB -R "16*{select[clx2s8260L] span[ptile=1]}"
+##BSUB -q idealq
+#BSUB -R "64*{select[clx2s8260L] span[ptile=1]}"
 
 . /panfs/users/Xdruhe/setup_environment.bash
 cd /panfs/users/Xdruhe/saraGAN/SURFGAN/ 
@@ -14,8 +15,10 @@ export TF_XLA_FLAGS=--tf_xla_cpu_global_jit
 export KMP_SETTINGS=TRUE
 export OMP_NUM_THREADS=48
 
-MODEL=surfgan
-PHASE=5
-CONTINUE_PATH=/panfs/users/Xdruhe/saraGAN/SURFGAN/runs/${MODEL}/model_$((PHASE - 1))/model_$((PHASE - 1))
+MODEL=pgan2
+PHASE=8
+# CONTINUE_PATH=/panfs/users/Xdruhe/saraGAN/SURFGAN/runs/${MODEL}/model_$((PHASE - 1))/model_$((PHASE - 1))
+DATA_DIR='/lfs/lfs12/Xdruhe/LIDC-IDRI/npy/average/'
 
-mpirun -np 16 -ppn 1 python -u main.py ${MODEL} '/panfs/users/Xdruhe/LIDC-IDRI/npy/average' '(1, 128, 512, 512)' --scratch_path '/scratch/' --starting_phase ${PHASE} --ending_phase ${PHASE} --base_dim 1024 --latent_dim 1024 --horovod --starting_alpha 1 --continue_path=${CONTINUE_PATH}
+# mpirun -np 128 -ppn 2 --map-by ppr:1:node:pe=8 python -u main.py ${MODEL} '/panfs/users/Xdruhe/LIDC-IDRI/npy/average' '(1, 128, 512, 512)' --scratch_path '/scratch/' --starting_phase ${PHASE} --ending_phase ${PHASE} --base_dim 1024 --latent_dim 1024 --horovod
+mpirun -np 64 -ppn 1 python -u main.py ${MODEL} ${DATA_DIR} '(1, 128, 512, 512)' --scratch_path '/' --starting_phase ${PHASE} --ending_phase ${PHASE} --base_dim 512 --latent_dim 512 --horovod --starting_alpha 0 --base_batch_size 128 --mixing_nimg 4194304 --stabilizing_nimg 4194304 --learning_rate 0.001 --d_annealing 1 --g_annealing 1
