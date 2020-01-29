@@ -2,13 +2,6 @@ from networks.ops import *
 import time
 
 
-def num_filters(phase, num_phases, base_dim):
-    filter_list = [512, 512, 128, 128, 128, 64, 32, 16]
-    assert num_phases == len(filter_list)
-    filters = filter_list[phase - 1]
-    return filters
-
-
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
 
     with tf.variable_scope('residual'):
@@ -54,7 +47,7 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
         return x
 
 
-def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation, param=None, is_reuse=False):
+def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation, param=None, is_reuse=False, size='medium'):
 
     with tf.variable_scope('discriminator') as scope:
 
@@ -62,13 +55,13 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
             scope.reuse_variables()
 
         with tf.variable_scope(f'from_rgb_{phase}'):
-            filters_out = num_filters(phase, num_phases, base_dim)
+            filters_out = num_filters(phase, num_phases, base_dim, size=size)
             x = from_rgb(x, filters_out, activation, param=param)
 
         for i in reversed(range(2, phase + 1)):
             with tf.variable_scope(f'discriminator_block_{i}'):
-                filters_in = num_filters(i, num_phases, base_dim)
-                filters_out = num_filters(i - 1, num_phases, base_dim)
+                filters_in = num_filters(i, num_phases, base_dim, size=size)
+                filters_out = num_filters(i - 1, num_phases, base_dim, size=size)
                 x = discriminator_block(x, filters_in, filters_out, activation, param=param)
 
         x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, param)

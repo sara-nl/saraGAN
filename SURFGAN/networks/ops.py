@@ -37,8 +37,8 @@ def get_weight(shape, activation, lrmul=1, param=None):
                            initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef
 
 
-def apply_bias(x):
-    b = tf.get_variable('bias', shape=[x.shape[1]], initializer=tf.initializers.zeros())
+def apply_bias(x, lrmul=1):
+    b = tf.get_variable('bias', shape=[x.shape[1]], initializer=tf.initializers.zeros()) * lrmul
     b = tf.cast(b, x.dtype)
     if len(x.shape) == 2:
         return x + b
@@ -108,8 +108,15 @@ def act(x, activation, param=None):
 #     return filters
 
 
-def num_filters(phase, num_phases, base_dim):
-    filter_list = [1024, 1024, 256, 256, 256, 128, 64, 32]
+def num_filters(phase, num_phases, base_dim=None, size=None):
+    if size == 'small':
+        filter_list = [256, 256, 64, 64, 64, 32, 16, 8]
+    elif size == 'medium':
+        filter_list = [512, 512, 128, 128, 128, 64, 32, 16]
+    elif size == 'big':
+        filter_list = [1024, 1024, 256, 256, 256, 128, 64, 32]
+    else:
+        raise ValueError(f"Unknown size: {size}")
     assert num_phases == len(filter_list)
     filters = filter_list[phase - 1]
     return filters

@@ -95,7 +95,7 @@ if __name__ == '__main__':
     base_shape = [1, 1, 4, 4]
     latent_dim = 512
     final_shape = [1, 128, 512, 512]
-    for phase in range(6, 7):
+    for phase in range(7, 8):
         tf.reset_default_graph()
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         real_image_input = tf.random.normal(shape=shape)
