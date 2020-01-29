@@ -349,8 +349,6 @@ def main(args, config):
                 sess.run(hvd.broadcast_global_variables(0))
 
             local_step = 0
-            sess.graph.finalize()
-
             # take_first_snapshot = True
 
             while True:
@@ -630,7 +628,7 @@ if __name__ == '__main__':
                         type=float, help='discriminator annealing rate, 1 -> no annealing.')
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
-    parser.add_argument('--beta2', type=float, default=0.9)
+    parser.add_argument('--beta2', type=float, default=0.99)
     parser.add_argument('--ema_beta', type=float, default=0.99)
     parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')
