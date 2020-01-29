@@ -15,6 +15,7 @@ def generator(z,
               is_training=True,
               param=None,
               truncation_psi=0.7, truncation_layers=8, beta=0.995, style_mixing_prob=0.9,
+              size='medium',
               is_reuse=False):
 
     with tf.variable_scope('generator') as scope:
@@ -54,7 +55,7 @@ def generator(z,
                 coefs = tf.where(layer_idx < truncation_layers, truncation_psi * ones, ones)
                 d_z = coefs * d_z + (1 - coefs) * d_z_avg
 
-        img_out = g_synthesis(d_z, alpha, phase, num_phases, base_dim, base_shape, activation, param)
+        img_out = g_synthesis(d_z, alpha, phase, num_phases, base_dim, base_shape, activation, param, size=size)
 
         return img_out
 
