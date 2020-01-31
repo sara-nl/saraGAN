@@ -142,10 +142,11 @@ def main(args, config):
         optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
         if args.horovod:
-            try:
-                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum if args.use_adasum else hvd.Average)
-                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum if args.use_adasum else hvd.Average)
-            except AttributeError:
+            if args.use_adasum:
+                # optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum)
+                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
+                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum)
+            else:
                 optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
                 optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
 
@@ -615,8 +616,8 @@ if __name__ == '__main__':
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 18)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 18)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
-    parser.add_argument('--loss_fn', default='logistic', choices=['logistic', 'wgan'])
-    parser.add_argument('--gp_weight', type=float, default=1)
+    parser.add_argument('--loss_fn', default='wgan', choices=['logistic', 'wgan'])
+    parser.add_argument('--gp_weight', type=float, default=10)
     parser.add_argument('--activation', type=str, default='leaky_relu')
     parser.add_argument('--leakiness', type=float, default=0.2)
     parser.add_argument('--seed', type=int, default=42)
@@ -628,7 +629,7 @@ if __name__ == '__main__':
                         type=float, help='discriminator annealing rate, 1 -> no annealing.')
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
-    parser.add_argument('--beta2', type=float, default=0.99)
+    parser.add_argument('--beta2', type=float, default=0.9)
     parser.add_argument('--ema_beta', type=float, default=0.99)
     parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')

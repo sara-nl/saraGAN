@@ -5,12 +5,14 @@ import time
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
 
     with tf.variable_scope('residual'):
+        x = tf.layers.dropout(x, rate=0.1)
         t = conv3d(x, filters_out, (1, 1, 1), activation, param=param)
         t = downscale3d(t)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
+        x = tf.layers.dropout(x, rate=0.1)
         x = conv3d(x, filters_in, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
@@ -18,6 +20,7 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
 
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
+        x = tf.layers.dropout(x, rate=0.1)
         x = conv3d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
@@ -34,10 +37,12 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
         with tf.variable_scope('conv'):
             shape = x.get_shape().as_list()[2:]
             kernel = [k(s) for s in shape]
+            x = tf.layers.dropout(x, rate=0.1)
             x = conv3d(x, filters_out, kernel, activation=activation, param=param)
             x = apply_bias(x)
             x = act(x, activation, param=param)
         with tf.variable_scope('dense'):
+            x = tf.layers.dropout(x, rate=0.1)
             x = dense(x, 1, activation='linear')
             x = apply_bias(x)
 
@@ -53,6 +58,7 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
 
         with tf.variable_scope(f'from_rgb_{phase}'):
             filters_out = num_filters(phase, num_phases, base_dim, size=size)
+            x = tf.layers.dropout(x, rate=0.1)
             x = from_rgb(x, filters_out, activation, param=param)
 
         for i in reversed(range(2, phase + 1)):
