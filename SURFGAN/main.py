@@ -316,23 +316,22 @@ def main(args, config):
 
             trainable_variable_names = [v.name for v in tf.trainable_variables()]
 
-            if len(var_list) > 0 and phase > args.starting_phase:
+            if var_list is not None and phase > args.starting_phase:
+                print("Restoring variables from:", os.path.join(logdir, f'model_{phase - 1}'))
                 var_names = [v.name for v in var_list]
-                load_vars = [sess.graph.get_tensor_by_name(
-                    n) for n in var_names if n in trainable_variable_names]
+                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
-            elif (len(var_list) > 0 is not None
-                  and args.continue_path
-                  and phase == args.starting_phase):
+            elif var_list is not None and args.continue_path and phase == args.starting_phase:
+                print("Restoring variables from:", args.continue_path)
                 var_names = [v.name for v in var_list]
-                load_vars = [sess.graph.get_tensor_by_name(
-                    n) for n in var_names if n in trainable_variable_names]
+                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(args.continue_path))
             else:
                 if verbose:
-                    print("Not restoring variables.")
+                     print("Not restoring variables.")
+                     print("Variable List Length:", len(var_list))
 
             var_list = gen_vars + disc_vars
 
