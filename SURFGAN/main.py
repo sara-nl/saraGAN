@@ -95,7 +95,7 @@ def main(args, config):
         dataset = dataset.make_one_shot_iterator()
         real_image_input = tf.squeeze(dataset.get_next(), axis=0)
         real_image_input = tf.ensure_shape(real_image_input, [batch_size] + list(npy_data.shape))
-        # real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+        real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
@@ -122,8 +122,8 @@ def main(args, config):
             else:
                 raise ValueError(args.d_scaling)
 
-        # optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-        # optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+        optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
         # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
         # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
         # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
@@ -138,14 +138,15 @@ def main(args, config):
             update_g_lr = g_lr.assign(g_lr * args.g_annealing)
             update_d_lr = d_lr.assign(d_lr * args.d_annealing)
 
-        optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-        optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+        # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
         if args.horovod:
-            try:
-                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum if args.use_adasum else hvd.Average)
-                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum if args.use_adasum else hvd.Average)
-            except AttributeError:
+            if args.use_adasum:
+                # optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum)
+                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
+                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum)
+            else:
                 optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
                 optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
 
@@ -315,23 +316,22 @@ def main(args, config):
 
             trainable_variable_names = [v.name for v in tf.trainable_variables()]
 
-            if len(var_list) > 0 and phase > args.starting_phase:
+            if var_list is not None and phase > args.starting_phase:
+                print("Restoring variables from:", os.path.join(logdir, f'model_{phase - 1}'))
                 var_names = [v.name for v in var_list]
-                load_vars = [sess.graph.get_tensor_by_name(
-                    n) for n in var_names if n in trainable_variable_names]
+                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
-            elif (len(var_list) > 0 is not None
-                  and args.continue_path
-                  and phase == args.starting_phase):
+            elif var_list is not None and args.continue_path and phase == args.starting_phase:
+                print("Restoring variables from:", args.continue_path)
                 var_names = [v.name for v in var_list]
-                load_vars = [sess.graph.get_tensor_by_name(
-                    n) for n in var_names if n in trainable_variable_names]
+                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(args.continue_path))
             else:
                 if verbose:
-                    print("Not restoring variables.")
+                     print("Not restoring variables.")
+                     print("Variable List Length:", len(var_list))
 
             var_list = gen_vars + disc_vars
 
@@ -405,6 +405,8 @@ def main(args, config):
 
                 assert alpha.eval() >= 0
 
+                writer.flush()
+
             if verbose:
                 print(f"Begin stabilizing epochs in phase {phase}")
 
@@ -443,6 +445,8 @@ def main(args, config):
                           f"alpha {alpha.eval():.2f}")
 
                 sess.run(ema_op)
+
+                writer.flush()
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
                     # if verbose:
@@ -615,8 +619,8 @@ if __name__ == '__main__':
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 18)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 18)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
-    parser.add_argument('--loss_fn', default='logistic', choices=['logistic', 'wgan'])
-    parser.add_argument('--gp_weight', type=float, default=1)
+    parser.add_argument('--loss_fn', default='wgan', choices=['logistic', 'wgan'])
+    parser.add_argument('--gp_weight', type=float, default=10)
     parser.add_argument('--activation', type=str, default='leaky_relu')
     parser.add_argument('--leakiness', type=float, default=0.2)
     parser.add_argument('--seed', type=int, default=42)
@@ -628,7 +632,7 @@ if __name__ == '__main__':
                         type=float, help='discriminator annealing rate, 1 -> no annealing.')
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
-    parser.add_argument('--beta2', type=float, default=0.99)
+    parser.add_argument('--beta2', type=float, default=0.9)
     parser.add_argument('--ema_beta', type=float, default=0.99)
     parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')

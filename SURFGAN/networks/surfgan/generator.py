@@ -1,78 +1,75 @@
-import os
-from networks.ops import *
+import tensorflow as tf
+from networks.stylegan2.g_mapping import g_mapping
+from networks.stylegan2.g_synthesis import g_synthesis
+import numpy as np
 import time
 
 
-def num_filters(phase, num_phases, base_dim):
-    filter_list = [1024, 1024, 256, 256, 256, 256, 128, 64]
-    assert num_phases == len(filter_list)
-    filters = filter_list[phase - 1]
-    return filters
+def generator(z,
+              alpha,
+              phase,
+              num_phases,
+              base_dim,
+              base_shape,
+              activation,
+              is_training=True,
+              param=None,
+              truncation_psi=None, truncation_layers=8, beta=0.995, style_mixing_prob=0.9,
+              size='medium',
+              is_reuse=False):
 
+    with tf.variable_scope('generator') as scope:
+        if is_reuse:
+            scope.reuse_variables()
 
-def generator_in(x, filters, shape, activation, param=None):
-    with tf.variable_scope('dense'):
-        x = dense(x, np.product(shape) * filters, activation, param=param)
-        x = apply_bias(x)
-        x = act(x, activation, param=param)
-    x = tf.reshape(x, [-1, filters] + list(shape))
-    return x
+        d_z_avg = tf.get_variable('d_z_avg', shape=z.get_shape().as_list()[1], initializer=tf.initializers.zeros(),
+                                  trainable=False)
+        d_z = g_mapping(z, phase)
 
+        if is_training:
+            with tf.variable_scope('d_z_avg'):
+                batch_avg = tf.reduce_mean(d_z[:, 0], axis=0)
+                update_op = tf.assign(d_z_avg, beta * d_z_avg + (1 - beta) * batch_avg)
+                with tf.control_dependencies([update_op]):
+                    d_z = tf.identity(d_z)
 
-def generator_block(x, filters_out, activation, param=None):
-    with tf.variable_scope('upsample'):
-        x = upscale3d(x)
+        if is_training:
+            z_reg = tf.random_normal(tf.shape(z))
+            d_z_reg = g_mapping(z_reg, phase, is_reuse=True)
 
-    with tf.variable_scope('conv_1'):
-        shape = x.get_shape().as_list()[2:]
-        kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_out, kernel, activation, param=param)
-        x = apply_bias(x)
-        x = act(x, activation, param=param)
-        # x = pixel_norm(x)
+            layer_idx = np.arange(phase * 3 - 2)[np.newaxis, :, np.newaxis]
 
-    return x
+            mixing_cutoff = tf.cond(
+                tf.random_uniform([], 0.0, 1.0) < style_mixing_prob,
+                lambda: tf.random_uniform([], 1, phase, dtype=tf.int32),
+                lambda: phase * 3 - 2)
 
+            d_z = tf.where(tf.broadcast_to(layer_idx < mixing_cutoff, tf.shape(d_z)), d_z, d_z_reg)
 
-def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None):
-    with tf.variable_scope('generator'):
-        with tf.variable_scope('generator_in'):
-            x = generator_in(x, filters=base_dim, shape=base_shape[1:], activation=activation, param=param)
+        # Apply truncation trick.
+        if not is_training and truncation_psi is not None:
+            with tf.variable_scope('truncation'):
+                layer_idx = np.arange(phase * 3 - 2)[np.newaxis, :, np.newaxis]
+                ones = np.ones(layer_idx.shape, dtype=np.float32)
+                coefs = tf.where(layer_idx < truncation_layers, truncation_psi * ones, ones)
+                d_z = coefs * d_z + (1 - coefs) * d_z_avg
 
-        x_upsample = None
+        img_out = g_synthesis(d_z, alpha, phase, num_phases, base_dim, base_shape, activation, param, size=size)
 
-        for i in range(2, phase + 1):
-
-            if i == phase:
-                with tf.variable_scope(f'to_rgb_{phase - 1}'):
-                    x_upsample = upscale3d(to_rgb(x, channels=base_shape[0]))
-
-            filters_out = num_filters(i, num_phases, base_dim)
-            with tf.variable_scope(f'generator_block_{i}'):
-                x = generator_block(x, filters_out, activation=activation, param=param)
-
-        with tf.variable_scope(f'to_rgb_{phase}'):
-            x_out = to_rgb(x, channels=base_shape[0])
-
-        if x_upsample is not None:
-            x_out = alpha * x_upsample + (1 - alpha) * x_out
-
-        return x_out
+        return img_out
 
 
 if __name__ == '__main__':
-
-    os.environ['OMP_NUM_THREADS'] = str(16)
 
     num_phases = 8
     base_dim = 1024
     latent_dim = 1024
     base_shape = [1, 1, 4, 4]
-    for phase in range(8, 9):
+    for phase in range(1, 2):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
         y = generator(x, 0.5, phase, num_phases, base_dim, base_shape, activation='leaky_relu',
-                      param=0.3)
+                      is_training=True, param=0.3)
 
         loss = tf.reduce_sum(y)
         optim = tf.train.GradientDescentOptimizer(1e-5)

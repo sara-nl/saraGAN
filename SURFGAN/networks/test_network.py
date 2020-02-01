@@ -100,7 +100,7 @@ if __name__ == '__main__':
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         real_image_input = tf.random.normal(shape=shape)
 
-        train_gen, train_disc = main('pgan2', final_shape, real_image_input, latent_dim, base_dim, phase)
+        train_gen, train_disc = main('surfgan', final_shape, real_image_input, latent_dim, base_dim, phase)
 
         init_op = tf.global_variables_initializer()
 
