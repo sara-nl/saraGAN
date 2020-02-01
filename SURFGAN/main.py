@@ -95,7 +95,7 @@ def main(args, config):
         dataset = dataset.make_one_shot_iterator()
         real_image_input = tf.squeeze(dataset.get_next(), axis=0)
         real_image_input = tf.ensure_shape(real_image_input, [batch_size] + list(npy_data.shape))
-        # real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+        real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
@@ -122,8 +122,8 @@ def main(args, config):
             else:
                 raise ValueError(args.d_scaling)
 
-        # optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-        # optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+        optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
         # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
         # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
         # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
@@ -138,8 +138,8 @@ def main(args, config):
             update_g_lr = g_lr.assign(g_lr * args.g_annealing)
             update_d_lr = d_lr.assign(d_lr * args.d_annealing)
 
-        optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-        optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+        # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
         if args.horovod:
             if args.use_adasum:
@@ -406,6 +406,8 @@ def main(args, config):
 
                 assert alpha.eval() >= 0
 
+                writer.flush()
+
             if verbose:
                 print(f"Begin stabilizing epochs in phase {phase}")
 
@@ -444,6 +446,8 @@ def main(args, config):
                           f"alpha {alpha.eval():.2f}")
 
                 sess.run(ema_op)
+
+                writer.flush()
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
                     # if verbose:
