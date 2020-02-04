@@ -9,7 +9,7 @@ from tensorflow.data.experimental import AUTOTUNE
 
 
 class ImageNetDataset:
-    def __init__(self, imagenet_dir, scratch_dir=None, copy_files=False, is_correct_phase=False, num_classes=1):
+    def __init__(self, imagenet_dir, scratch_dir, copy_files, is_correct_phase, num_classes=1):
         super(ImageNetDataset, self).__init__()
 
         train_folder = os.path.join(imagenet_dir, 'train')
@@ -43,11 +43,40 @@ class ImageNetDataset:
                 self.test_labels.append(self.label_to_ix[label])
                 self.test_examples.append(f)
 
-        # self.train_examples = self.train_examples[:5]
-        # self.train_labels = self.train_labels[:5]
+        if scratch_dir is not None:
+            if scratch_dir[-1] == '/':
+                scratch_dir = scratch_dir[:-1]
 
-        print(f"Length of train dataset: {len(self.train_labels)}")
-        print(f"Length of test dataset: {len(self.test_labels)}")
+        self.scratch_dir = os.path.normpath(scratch_dir + imagenet_dir) if is_correct_phase else imagenet_dir
+
+        print(copy_files, is_correct_phase)
+        if copy_files and is_correct_phase:
+            os.makedirs(self.scratch_dir, exist_ok=True)
+            print("Copying train files to scratch...")
+            for f in self.train_examples:
+                # os.path.isdir(self.scratch_dir)
+                if not os.path.isfile(os.path.normpath(scratch_dir + f)):
+                    shutil.copy(f, os.path.normpath(scratch_dir + f))
+
+            for f in self.test_examples:
+                # os.path.isdir(self.scratch_dir)
+                if not os.path.isfile(os.path.normpath(scratch_dir + f)):
+                    shutil.copy(f, os.path.normpath(scratch_dir + f))
+
+        while not all(os.path.isfile(os.path.normpath(scratch_dir + f)) for f in self.train_examples):
+            time.sleep(1)
+
+        while not all(os.path.isfile(os.path.normpath(scratch_dir + f)) for f in self.test_examples):
+            time.sleep(1)
+
+        self.scratch_files_train = [os.path.normpath(scratch_dir + f) for f in self.train_examples]
+        self.scratch_files_test = [os.path.normpath(scratch_dir + f) for f in self.test_examples]
+
+        print(f"Length of train dataset: {len(self.scratch_files_train)}")
+        print(f"Length of test dataset: {len(self.scratch_files_test)}")
+
+        assert len(self.scratch_files_train) == len(self.train_labels)
+        assert len(self.scratch_files_test) == len(self.test_labels)
 
         test_image = io.imread(self.train_examples[0])
         self.shape = test_image.shape
@@ -79,8 +108,8 @@ class ImageNetDataset:
             return len(self.test_labels)
 
 
-def imagenet_dataset(imagenet_path, size, gpu=False):
-    imagenet_data = ImageNetDataset(imagenet_path, scratch_dir='/', copy_files=False, is_correct_phase=True)
+def imagenet_dataset(imagenet_path, size, copy_files, is_correct_phase, gpu=False):
+    imagenet_data = ImageNetDataset(imagenet_path, scratch_dir='/', copy_files=copy_files, is_correct_phase=is_correct_phase)
 
     dataset = tf.data.Dataset.from_tensor_slices((imagenet_data.train_examples, imagenet_data.train_labels))
 
@@ -99,7 +128,6 @@ def imagenet_dataset(imagenet_path, size, gpu=False):
     dataset = dataset.map(lambda path, label: tuple(tf.py_func(load, [path, label], [tf.float32, tf.float32])), num_parallel_calls=parallel_calls)
     dataset = dataset.apply(tf.contrib.data.ignore_errors())
     return dataset
-
 
 
 class NumpyPathDataset:
