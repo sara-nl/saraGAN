@@ -85,7 +85,7 @@ def imagenet_dataset(imagenet_path, size, gpu=False):
     dataset = tf.data.Dataset.from_tensor_slices((imagenet_data.train_examples, imagenet_data.train_labels))
 
     def load(path, label):
-        x = np.transpose((transform.resize((io.imread(path.decode()).astype(np.float32) - 127.5) / 127.5), (size, size)), [2, 0, 1])
+        x = np.transpose(transform.resize((io.imread(path.decode()).astype(np.float32) - 127.5) / 127.5, (size, size)), [2, 0, 1])
         y = label.astype(np.float32)
         return x, y
 
@@ -96,7 +96,7 @@ def imagenet_dataset(imagenet_path, size, gpu=False):
     else:
         parallel_calls = int(os.environ['OMP_NUM_THREADS'])
 
-    dataset = dataset.map(lambda path, label: tuple(tf.py_func(load, [path, label], [tf.float32, tf.float32])), num_parallel_calls=int(os.environ['OMP_NUM_THREADS']))
+    dataset = dataset.map(lambda path, label: tuple(tf.py_func(load, [path, label], [tf.float32, tf.float32])), num_parallel_calls=parallel_calls)
     dataset = dataset.apply(tf.contrib.data.ignore_errors())
     return dataset
 
