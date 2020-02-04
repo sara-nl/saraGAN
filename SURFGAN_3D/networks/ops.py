@@ -215,7 +215,6 @@ def instance_norm(x, epsilon=1e-8):
     assert len(x.shape) == 5  # NCDHW
     with tf.variable_scope('instance_norm'):
         x -= tf.reduce_mean(x, axis=[2, 3, 4], keepdims=True)
-        epsilon = tf.constant(epsilon, dtype=x.dtype, name='epsilon')
         x *= tf.rsqrt(tf.reduce_mean(tf.square(x), axis=[2, 3, 4], keepdims=True) + epsilon)
         return x
 

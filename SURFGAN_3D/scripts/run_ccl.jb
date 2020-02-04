@@ -1,0 +1,25 @@
+#!/bin/sh
+#BSUB -o NKI_%J.out
+#BSUB -e NKI_%J.err
+#BSUB -q workq
+##BSUB -q idealq
+#BSUB -R "32*{select[clx2s8260L] span[ptile=1]}"
+
+. /panfs/users/Xdruhe/setup_environment.bash
+cd /panfs/users/Xdruhe/saraGAN/SURFGAN/ 
+
+export KMP_BLOCKTIME=0
+export KMP_AFFINITY='granularity=fine,verbose,compact,1,0'
+export XLA_FLAGS=--xla_hlo_profile 
+export TF_XLA_FLAGS=--tf_xla_cpu_global_jit
+export KMP_SETTINGS=TRUE
+export OMP_NUM_THREADS=48
+
+MODEL=stylegan2
+PHASE=7
+# CONTINUE_PATH=/panfs/users/Xdruhe/saraGAN/SURFGAN/runs/${MODEL}/model_$((PHASE - 1))/model_$((PHASE - 1))
+DATA_DIR='/lfs/lfs12/Xdruhe/LIDC-IDRI/npy/average/'
+
+# mpirun -np 128 -ppn 2 --map-by ppr:1:node:pe=8 python -u main.py ${MODEL} '/panfs/users/Xdruhe/LIDC-IDRI/npy/average' '(1, 128, 512, 512)' --scratch_path '/scratch/' --starting_phase ${PHASE} --ending_phase ${PHASE} --base_dim 1024 --latent_dim 1024 --horovod
+mpirun -np 64 -ppn 2 --map-by ppr:1:node:pe=24 python -u main.py ${MODEL} ${DATA_DIR} '(1, 128, 512, 512)' --scratch_path '/' --starting_phase ${PHASE} --ending_phase ${PHASE} --base_dim 512 --latent_dim 512 --horovod --starting_alpha 0 --base_batch_size 128 --mixing_nimg 4194304 --stabilizing_nimg 4194304 --learning_rate 0.001 --d_annealing 1 --g_annealing 1 --network_size medium --gp_weight 10 --loss_fn wgan --beta2 0.9 --optim_strategy alternate
+# mpirun -np 64 -ppn 2 --map-by ppr:1:node:pe=24 python -u main.py ${MODEL} ${DATA_DIR} '(1, 128, 512, 512)' --scratch_path '/' --starting_phase ${PHASE} --ending_phase ${PHASE} --base_dim 512 --latent_dim 512 --horovod --starting_alpha 0 --base_batch_size 128 --mixing_nimg 4194304 --stabilizing_nimg 4194304 --learning_rate 0.001 --d_annealing 1 --g_annealing 1 --network_size medium --gp_weight 10 --loss
