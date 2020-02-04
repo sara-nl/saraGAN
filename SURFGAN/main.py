@@ -100,9 +100,6 @@ def main(args, config):
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
 
-        g_lr = args.learning_rate
-        d_lr = args.learning_rate
-
         if args.horovod:
             if args.g_scaling == 'sqrt':
                 g_lr = g_lr * np.sqrt(hvd.size())
@@ -122,6 +119,9 @@ def main(args, config):
             else:
                 raise ValueError(args.d_scaling)
 
+        d_lr = tf.Variable(args.learning_rate, name='d_lr', dtype=tf.float32)
+        g_lr = tf.Variable(args.learning_rate / 2, name='g_lr', dtype=tf.float32)
+ 
         optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
         optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
         # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
@@ -129,8 +129,6 @@ def main(args, config):
         # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
         # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
 
-        d_lr = tf.Variable(args.learning_rate, name='d_lr', dtype=tf.float32)
-        g_lr = tf.Variable(args.learning_rate, name='g_lr', dtype=tf.float32)
         lr_step = tf.Variable(0, name='step', dtype=tf.float32)
 
         update_step = lr_step.assign_add(1.0)
@@ -353,7 +351,7 @@ def main(args, config):
 
             while True:
                 start = time.time()
-                if local_step % 2048 == 0 and local_step > 1:
+                if local_step % 128 == 0 and local_step > 1:
                     if args.horovod:
                         # Broadcast variables every 1024 gradient steps.
                         sess.run(hvd.broadcast_global_variables(0))
@@ -405,7 +403,8 @@ def main(args, config):
 
                 assert alpha.eval() >= 0
 
-                writer.flush()
+                if verbose:
+                    writer.flush()
 
             if verbose:
                 print(f"Begin stabilizing epochs in phase {phase}")
@@ -416,7 +415,7 @@ def main(args, config):
                 start = time.time()
                 assert alpha.eval() == 0
                 # Broadcast variables every 1024 gradient steps.
-                if local_step % 2048 == 0 and local_step > 0:
+                if local_step % 128 == 0 and local_step > 0:
 
                     if args.horovod:
                         sess.run(hvd.broadcast_global_variables(0))
@@ -446,7 +445,8 @@ def main(args, config):
 
                 sess.run(ema_op)
 
-                writer.flush()
+                if verbose:
+                    writer.flush()
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
                     # if verbose:
@@ -680,7 +680,7 @@ if __name__ == '__main__':
     else:
         config = tf.ConfigProto(graph_options=gopts,
                                 intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
-                                inter_op_parallelism_threads=4,
+                                inter_op_parallelism_threads=2,
                                 allow_soft_placement=True,
                                 device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 
