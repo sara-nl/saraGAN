@@ -648,9 +648,11 @@ if __name__ == '__main__':
     if args.network_size == 'small':
         assert args.latent_dim == args.base_dim == 256
     elif args.network_size == 'medium':
-        assert args.latent_dim == args.base_dim == 512
+        assert args.latent_dim == 512
+        assert args.base_dim == 512
     elif args.network_size == 'big':
-        assert args.latent_dim == args.base_dim == 1024
+        assert args.latent_dim == 512
+        assert args.base_dim == 1024
     else:
         raise ValueError("Unknown network size ", args.network_size)
 
@@ -680,7 +682,7 @@ if __name__ == '__main__':
     else:
         config = tf.ConfigProto(graph_options=gopts,
                                 intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
-                                inter_op_parallelism_threads=4,
+                                inter_op_parallelism_threads=2,
                                 allow_soft_placement=True,
                                 device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 
