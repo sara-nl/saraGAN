@@ -27,21 +27,21 @@ class ImageNetDataset:
         self.label_to_ix = {label: i for i, label in enumerate(classes_train)}
         self.ix_to_label = {i: label for label, i in self.label_to_ix.items()}
 
-        self.train_examples = []
+        train_examples = []
         self.train_labels = []
 
         for label in classes_train:
             for f in glob.glob(os.path.join(train_folder, label) + '/*.JPEG'):
                 self.train_labels.append(self.label_to_ix[label])
-                self.train_examples.append(f)
+                train_examples.append(f)
 
-        self.test_examples = []
+        test_examples = []
         self.test_labels = []
 
         for label in classes_test:
             for f in glob.glob(os.path.join(test_folder, label) + '/*.JPEG'):
                 self.test_labels.append(self.label_to_ix[label])
-                self.test_examples.append(f)
+                test_examples.append(f)
 
         if scratch_dir is not None:
             if scratch_dir[-1] == '/':
@@ -53,24 +53,24 @@ class ImageNetDataset:
         if copy_files and is_correct_phase:
             os.makedirs(self.scratch_dir, exist_ok=True)
             print("Copying train files to scratch...")
-            for f in self.train_examples:
+            for f in train_examples:
                 # os.path.isdir(self.scratch_dir)
                 if not os.path.isfile(os.path.normpath(scratch_dir + f)):
                     shutil.copy(f, os.path.normpath(scratch_dir + f))
 
-            for f in self.test_examples:
+            for f in test_examples:
                 # os.path.isdir(self.scratch_dir)
                 if not os.path.isfile(os.path.normpath(scratch_dir + f)):
                     shutil.copy(f, os.path.normpath(scratch_dir + f))
 
-        while not all(os.path.isfile(os.path.normpath(scratch_dir + f)) for f in self.train_examples):
+        while not all(os.path.isfile(os.path.normpath(scratch_dir + f)) for f in train_examples):
             time.sleep(1)
 
-        while not all(os.path.isfile(os.path.normpath(scratch_dir + f)) for f in self.test_examples):
+        while not all(os.path.isfile(os.path.normpath(scratch_dir + f)) for f in test_examples):
             time.sleep(1)
 
-        self.scratch_files_train = [os.path.normpath(scratch_dir + f) for f in self.train_examples]
-        self.scratch_files_test = [os.path.normpath(scratch_dir + f) for f in self.test_examples]
+        self.scratch_files_train = [os.path.normpath(scratch_dir + f) for f in train_examples]
+        self.scratch_files_test = [os.path.normpath(scratch_dir + f) for f in test_examples]
 
         print(f"Length of train dataset: {len(self.scratch_files_train)}")
         print(f"Length of test dataset: {len(self.scratch_files_test)}")
@@ -78,7 +78,7 @@ class ImageNetDataset:
         assert len(self.scratch_files_train) == len(self.train_labels)
         assert len(self.scratch_files_test) == len(self.test_labels)
 
-        test_image = io.imread(self.train_examples[0])
+        test_image = io.imread(self.scratch_files_train[0])
         self.shape = test_image.shape
         self.dtype = test_image.dtype
 
@@ -111,7 +111,7 @@ class ImageNetDataset:
 def imagenet_dataset(imagenet_path, size, copy_files, is_correct_phase, gpu=False):
     imagenet_data = ImageNetDataset(imagenet_path, scratch_dir='/', copy_files=copy_files, is_correct_phase=is_correct_phase)
 
-    dataset = tf.data.Dataset.from_tensor_slices((imagenet_data.train_examples, imagenet_data.train_labels))
+    dataset = tf.data.Dataset.from_tensor_slices((imagenet_data.scratch_files_train, imagenet_data.train_labels))
 
     def load(path, label):
         x = np.transpose(transform.resize((io.imread(path.decode()).astype(np.float32) - 127.5) / 127.5, (size, size)), [2, 0, 1])
