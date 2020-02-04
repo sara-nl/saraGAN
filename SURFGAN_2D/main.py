@@ -60,7 +60,7 @@ def main(args, config):
 
         size = 2 * 2 ** phase
         if args.dataset == 'imagenet':
-            dataset = imagenet_dataset(args.dataset_path, size, copy_files=local_rank == 0, is_correct_phase=phase >= args.starting_phase, gpu=args.gpu)
+            dataset = imagenet_dataset(args.dataset_path, args.scratch_path, size, copy_files=local_rank == 0, is_correct_phase=phase >= args.starting_phase, gpu=args.gpu)
         else:
             raise ValueError(f"Unknown dataset {args.dataset_path}")
 
