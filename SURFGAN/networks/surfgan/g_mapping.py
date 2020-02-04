@@ -1,4 +1,5 @@
 from networks.ops import *
+from networks.surfgan.ops import *  # No good coding style, but ensures to use these ops.
 
 
 def g_mapping(
@@ -21,8 +22,8 @@ def g_mapping(
         for layer_idx in range(mapping_layers):
             fmaps = latent_fmaps if layer_idx == mapping_layers - 1 else mapping_fmaps
             with tf.variable_scope(f'dense_{layer_idx}'):
-                x = dense(x, fmaps=fmaps, activation=activation, lrmul=mapping_lrmul, param=act_param)
-                x = apply_bias(x, lrmul=mapping_lrmul)
+                x, runtime_coef = dense(x, fmaps=fmaps, activation=activation, lrmul=mapping_lrmul, param=act_param)
+                x = apply_bias(x, runtime_coef)
                 x = act(x, activation, param=act_param)
 
         with tf.variable_scope('broadcast_latents'):
