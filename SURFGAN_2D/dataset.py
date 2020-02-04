@@ -5,6 +5,7 @@ import os
 import shutil
 import time
 import tensorflow as tf
+from tensorflow.data.experimental import AUTOTUNE
 
 
 class ImageNetDataset:
@@ -78,17 +79,23 @@ class ImageNetDataset:
             return len(self.test_labels)
 
 
-def imagenet_dataset(imagenet_path, size):
+def imagenet_dataset(imagenet_path, size, gpu=False):
     imagenet_data = ImageNetDataset(imagenet_path, scratch_dir='/', copy_files=False, is_correct_phase=True)
 
     dataset = tf.data.Dataset.from_tensor_slices((imagenet_data.train_examples, imagenet_data.train_labels))
 
     def load(path, label):
-        x = np.transpose(transform.resize(io.imread(path.decode()).astype(np.float32) / 255, (size, size)), [2, 0, 1])
+        x = np.transpose((transform.resize((io.imread(path.decode()).astype(np.float32) - 127.5) / 127.5), (size, size)), [2, 0, 1])
         y = label.astype(np.float32)
         return x, y
 
     dataset = dataset.shuffle(len(imagenet_data))
+
+    if gpu:
+        parallel_calls = AUTOTUNE
+    else:
+        parallel_calls = int(os.environ['OMP_NUM_THREADS'])
+
     dataset = dataset.map(lambda path, label: tuple(tf.py_func(load, [path, label], [tf.float32, tf.float32])), num_parallel_calls=int(os.environ['OMP_NUM_THREADS']))
     dataset = dataset.apply(tf.contrib.data.ignore_errors())
     return dataset
