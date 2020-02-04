@@ -100,8 +100,8 @@ def main(args, config):
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
 
-        g_lr = args.learning_rate
-        d_lr = args.learning_rate
+        g_lr = args.g_lr
+        d_lr = args.d_lr
 
         if args.horovod:
             if args.g_scaling == 'sqrt':
@@ -122,24 +122,24 @@ def main(args, config):
             else:
                 raise ValueError(args.d_scaling)
 
+        d_lr = tf.Variable(d_lr, name='d_lr', dtype=tf.float32)
+        g_lr = tf.Variable(g_lr, name='g_lr', dtype=tf.float32)
+
         optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
         optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
         # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
         # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
         # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
         # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
+        # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
-        d_lr = tf.Variable(args.learning_rate, name='d_lr', dtype=tf.float32)
-        g_lr = tf.Variable(args.learning_rate, name='g_lr', dtype=tf.float32)
         lr_step = tf.Variable(0, name='step', dtype=tf.float32)
-
         update_step = lr_step.assign_add(1.0)
+
         with tf.control_dependencies([update_step]):
             update_g_lr = g_lr.assign(g_lr * args.g_annealing)
             update_d_lr = d_lr.assign(d_lr * args.d_annealing)
-
-        # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-        # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
         if args.horovod:
             if args.use_adasum:
@@ -353,9 +353,8 @@ def main(args, config):
 
             while True:
                 start = time.time()
-                if local_step % 2048 == 0 and local_step > 1:
+                if local_step % 128 == 0 and local_step > 1:
                     if args.horovod:
-                        # Broadcast variables every 1024 gradient steps.
                         sess.run(hvd.broadcast_global_variables(0))
                     saver = tf.train.Saver(var_list)
                     if verbose:
@@ -415,8 +414,7 @@ def main(args, config):
             while True:
                 start = time.time()
                 assert alpha.eval() == 0
-                # Broadcast variables every 1024 gradient steps.
-                if local_step % 2048 == 0 and local_step > 0:
+                if local_step % 128 == 0 and local_step > 0:
 
                     if args.horovod:
                         sess.run(hvd.broadcast_global_variables(0))
@@ -618,7 +616,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_global_batch_size', type=int, default=128)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 18)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 18)
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--g_lr', type=float, default=1e-5)
+    parser.add_argument('--d_lr', type=float, default=1e-4)
     parser.add_argument('--loss_fn', default='wgan', choices=['logistic', 'wgan'])
     parser.add_argument('--gp_weight', type=float, default=10)
     parser.add_argument('--activation', type=str, default='leaky_relu')
