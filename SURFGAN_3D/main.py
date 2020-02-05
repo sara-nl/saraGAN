@@ -295,6 +295,8 @@ def main(args, config):
             fake_image_grid = image_grid(fake_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
 
+            fake_image_grid = tf.clip_by_value(fake_image_grid, -1, 2)
+
             tf.summary.image('real_image', real_image_grid)
             tf.summary.image('fake_image', fake_image_grid)
 
