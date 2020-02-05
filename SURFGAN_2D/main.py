@@ -87,7 +87,7 @@ def main(args, config):
         # real_image_input = tf.squeeze(dataset.get_next(), axis=0)
         real_image_input, real_label = dataset.get_next()
         real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
-        real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+        # real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
