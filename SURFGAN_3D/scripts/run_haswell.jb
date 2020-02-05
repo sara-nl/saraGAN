@@ -14,4 +14,4 @@ export TF_XLA_FLAGS=--tf_xla_cpu_global_jit
 export KMP_SETTINGS=TRUE
 export OMP_NUM_THREADS=12
 
-mpirun -np 64 -ppn 1 python -u main.py pgan2 /lustre4/2/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --scratch_path '/' --starting_phase 6 --ending_phase 6 --base_dim 512 --latent_dim 512 --horovod --starting_alpha 0 --base_batch_size 64
+mpirun -np 128 -ppn 2 --map-by ppr:1:node:pe=12 python -u main.py surfgan /lustre4/2/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --scratch_path '/' --starting_phase 3 --ending_phase 8 --base_dim 256 --latent_dim 256 --network_size small --loss_fn logistic --gp_weight 1 --horovod --starting_alpha 0 --base_batch_size 1
