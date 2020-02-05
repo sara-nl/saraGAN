@@ -65,7 +65,7 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
                 x = generator_block(x, filters_out, activation=activation, param=param)
 
             with tf.variable_scope(f'to_rgb_{i}'):
-                x_out = to_rgb(x) + upscale2d(x_out)
+                x_out = alpha * to_rgb(x) + upscale2d(x_out)
 
         return x_out
 
@@ -74,7 +74,7 @@ if __name__ == '__main__':
     num_phases = 8
     base_dim = 512
     latent_dim = 512
-    base_shape = [1, 1, 4, 4]
+    base_shape = [3, 4, 4]
     for phase in range(8, 9):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
