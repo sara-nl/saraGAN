@@ -210,7 +210,7 @@ def instance_norm(x, epsilon=1e-8):
 def apply_noise(x):
     assert len(x.shape) == 4  # NCHW
     with tf.variable_scope('apply_noise'):
-        noise = tf.random_normal([tf.shape(x)[0], 1, x.shape[2], x.shape[3], x.shape[4]])
+        noise = tf.random_normal([tf.shape(x)[0], 1, x.shape[2], x.shape[3]])
         noise_strength = tf.get_variable('noise_strength', shape=[], initializer=tf.initializers.zeros())
         return x + noise * noise_strength
 

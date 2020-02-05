@@ -1,6 +1,6 @@
 import tensorflow as tf
-from networks.stylegan2.g_mapping import g_mapping
-from networks.stylegan2.g_synthesis import g_synthesis
+from networks.surfgan.g_mapping import g_mapping
+from networks.surfgan.g_synthesis import g_synthesis
 import numpy as np
 import time
 

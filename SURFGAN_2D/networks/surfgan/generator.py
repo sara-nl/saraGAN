@@ -1,6 +1,6 @@
 import tensorflow as tf
-from networks.stylegan2.g_mapping import g_mapping
-from networks.stylegan2.g_synthesis import g_synthesis
+from networks.surfgan.g_mapping import g_mapping
+from networks.surfgan.g_synthesis import g_synthesis
 import numpy as np
 import time
 
@@ -62,9 +62,9 @@ def generator(z,
 if __name__ == '__main__':
 
     num_phases = 8
-    base_dim = 1024
-    latent_dim = 1024
-    base_shape = [1, 1, 4, 4]
+    base_dim = 512
+    latent_dim = 512
+    base_shape = [3, 4, 4]
     for phase in range(1, 2):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)

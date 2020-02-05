@@ -1,6 +1,7 @@
 # pylint: disable=unused-wildcard-import
 from networks.ops import *
 
+
 def modulated_conv3d(x, z, f, k, activation, up=False, demodulate=True, param=None, lrmul=1):
     """
     :param x: input
