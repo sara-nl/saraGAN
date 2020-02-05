@@ -31,7 +31,6 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
 
 def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
     with tf.variable_scope(f'discriminator_out'):
-        x = minibatch_stddev_layer(x)
         with tf.variable_scope('conv'):
             shape = x.get_shape().as_list()[2:]
             kernel = [k(s) for s in shape]
