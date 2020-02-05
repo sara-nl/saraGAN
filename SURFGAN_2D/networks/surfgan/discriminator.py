@@ -83,7 +83,8 @@ if __name__ == '__main__':
     latent_dim = 512
     for phase in range(7, 8):
         tf.reset_default_graph()
-        shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
+        shape = [1, 3] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
+        print(shape)
         x = tf.random.normal(shape=shape)
         y = discriminator(x, 0.5, phase, num_phases, base_dim, latent_dim, activation='leaky_relu', param=0.3)
 

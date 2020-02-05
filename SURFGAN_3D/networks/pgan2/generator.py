@@ -14,7 +14,7 @@ def generator_in(x, filters, shape, activation, param=None):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
 
-        x = conv3d(x, filters, kernel, activation, param=param)
+        x = conv2d(x, filters, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
@@ -23,12 +23,12 @@ def generator_in(x, filters, shape, activation, param=None):
 
 def generator_block(x, filters_out, activation, param=None):
     with tf.variable_scope('upsample'):
-        x = upscale3d(x)
+        x = upscale2d(x)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_out, kernel, activation, param=param)
+        x = conv2d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)

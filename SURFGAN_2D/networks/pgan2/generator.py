@@ -14,7 +14,7 @@ def generator_in(x, filters, shape, activation, param=None):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
 
-        x = conv3d(x, filters, kernel, activation, param=param)
+        x = conv2d(x, filters, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
@@ -23,12 +23,12 @@ def generator_in(x, filters, shape, activation, param=None):
 
 def generator_block(x, filters_out, activation, param=None):
     with tf.variable_scope('upsample'):
-        x = upscale3d(x)
+        x = upscale2d(x)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_out, kernel, activation, param=param)
+        x = conv2d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
@@ -36,7 +36,7 @@ def generator_block(x, filters_out, activation, param=None):
     with tf.variable_scope('conv_2'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_out, kernel, activation, param=param)
+        x = conv2d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
@@ -65,7 +65,7 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
                 x = generator_block(x, filters_out, activation=activation, param=param)
 
             with tf.variable_scope(f'to_rgb_{i}'):
-                x_out = to_rgb(x) + upscale3d(x_out)
+                x_out = alpha * to_rgb(x) + upscale2d(x_out)
 
         return x_out
 
@@ -74,7 +74,7 @@ if __name__ == '__main__':
     num_phases = 8
     base_dim = 512
     latent_dim = 512
-    base_shape = [1, 1, 4, 4]
+    base_shape = [3, 4, 4]
     for phase in range(8, 9):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
