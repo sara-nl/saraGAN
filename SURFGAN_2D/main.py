@@ -611,8 +611,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_global_batch_size', type=int, default=1024)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 18)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 18)
-    parser.add_argument('--g_lr', type=float, default=1e-3)
-    parser.add_argument('--d_lr', type=float, default=1e-3)
+    parser.add_argument('--g_lr', type=float, default=1e-2)
+    parser.add_argument('--d_lr', type=float, default=1e-2)
     parser.add_argument('--loss_fn', default='logistic', choices=['logistic', 'wgan'])
     parser.add_argument('--gp_weight', type=float, default=1)
     parser.add_argument('--activation', type=str, default='leaky_relu')
@@ -663,7 +663,7 @@ if __name__ == '__main__':
         tf.random.set_random_seed(args.seed)
         random.seed(args.seed)
 
-    if args.architecture in ('stylegan2', 'pgan2'):
+    if args.architecture in ('stylegan2'):
         assert args.starting_phase == args.ending_phase
 
     gopts = tf.GraphOptions(place_pruned_graph=True)

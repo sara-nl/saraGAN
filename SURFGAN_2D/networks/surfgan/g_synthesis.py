@@ -67,10 +67,10 @@ def g_synthesis(d_z,
                                     param=param)
 
             if layer_idx == phase:
-                with tf.variable_scope(f'to_rgb_{i}'):
+                with tf.variable_scope(f'to_rgb_{layer_idx}'):
                     x_out = (1 - alpha) * to_rgb(x, d_z[:, layer_idx * 3 - 3]) + upscale2d(x_out)
             else:
-                with tf.variable_scope(f'to_rgb_{i}'):
+                with tf.variable_scope(f'to_rgb_{layer_idx}'):
                     x_out = to_rgb(x, d_z[:, layer_idx * 3 - 3]) + upscale2d(x_out)
 
         return x_out
