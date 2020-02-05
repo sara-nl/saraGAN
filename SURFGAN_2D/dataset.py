@@ -6,6 +6,7 @@ import shutil
 import time
 import tensorflow as tf
 from tensorflow.data.experimental import AUTOTUNE
+import horovod.tensorflow as hvd
 
 
 class ImageNetDataset:
@@ -19,8 +20,8 @@ class ImageNetDataset:
         classes_test = set(d for d in os.listdir(test_folder) if os.path.isdir(os.path.join(test_folder, d)))
         classes_train = classes_test = classes_train.intersection(classes_test)
 
-        classes_train = list(classes_train)[:num_classes]
-        classes_test = list(classes_test)[:num_classes]
+        classes_train = sorted(list(classes_train))[:num_classes]
+        classes_test = sorted(list(classes_test))[:num_classes]
 
         assert len(classes_train) == len(classes_test) == num_classes
 
@@ -43,42 +44,53 @@ class ImageNetDataset:
                 self.test_labels.append(self.label_to_ix[label])
                 test_examples.append(f)
 
-        if scratch_dir is not None:
-            if scratch_dir[-1] == '/':
-                scratch_dir = scratch_dir[:-1]
+        scratch_dir = os.path.normpath(scratch_dir) if is_correct_phase else imagenet_dir
 
-        self.scratch_dir = os.path.normpath(scratch_dir + imagenet_dir) if is_correct_phase else imagenet_dir
+        self.scratch_files_train = [] if is_correct_phase else train_examples
+        self.scratch_files_test = [] if is_correct_phase else test_examples
 
-        print(copy_files, is_correct_phase)
-        if copy_files and is_correct_phase:
-            os.makedirs(self.scratch_dir, exist_ok=True)
+        if is_correct_phase:
             print("Copying train files to scratch...")
-            for f in train_examples:
-                # os.path.isdir(self.scratch_dir)
-                if not os.path.isfile(os.path.normpath(scratch_dir + f)):
+            for f in sorted(train_examples):
+                if copy_files:
+                    directory = os.path.normpath(scratch_dir + f.rsplit('/', maxsplit=1)[0])
+                    if not os.path.exists(directory):
+                        os.makedirs(directory)
                     shutil.copy(f, os.path.normpath(scratch_dir + f))
+                self.scratch_files_train.append(os.path.normpath(scratch_dir + f))
+            if copy_files:
+                print("All Files Copied")
 
-            for f in test_examples:
-                # os.path.isdir(self.scratch_dir)
-                if not os.path.isfile(os.path.normpath(scratch_dir + f)):
+        if is_correct_phase:
+            print("Copying test files to scratch...")
+            for f in sorted(test_examples):
+                if copy_files:
+                    directory = os.path.normpath(scratch_dir + f.rsplit('/', maxsplit=1)[0])
+                    if not os.path.exists(directory):
+                        os.makedirs(directory)
                     shutil.copy(f, os.path.normpath(scratch_dir + f))
+                self.scratch_files_test.append(os.path.normpath(scratch_dir + f))
 
-        while not all(os.path.isfile(os.path.normpath(scratch_dir + f)) for f in train_examples):
+        while not all(os.path.exists(f) for f in self.scratch_files_train):
+            print(self.scratch_files_train)
+            print("Waiting...")
             time.sleep(1)
 
-        while not all(os.path.isfile(os.path.normpath(scratch_dir + f)) for f in test_examples):
+        while not all(os.path.exists(f) for f in self.scratch_files_test):
+            print("Waiting...")
             time.sleep(1)
 
-        self.scratch_files_train = [os.path.normpath(scratch_dir + f) for f in train_examples]
-        self.scratch_files_test = [os.path.normpath(scratch_dir + f) for f in test_examples]
+        if is_correct_phase:
+            assert all(os.path.isfile(f) for f in self.scratch_files_train)
+            assert all(os.path.isfile(f) for f in self.scratch_files_test)
 
-        print(f"Length of train dataset: {len(self.scratch_files_train)}")
-        print(f"Length of test dataset: {len(self.scratch_files_test)}")
+            print(f"Length of train dataset: {len(self.scratch_files_train)}")
+            print(f"Length of test dataset: {len(self.scratch_files_test)}")
 
-        assert len(self.scratch_files_train) == len(self.train_labels)
-        assert len(self.scratch_files_test) == len(self.test_labels)
+            assert len(self.scratch_files_train) == len(self.train_labels)
+            assert len(self.scratch_files_test) == len(self.test_labels)
 
-        test_image = io.imread(self.scratch_files_train[0])
+        test_image = io.imread(train_examples[0])
         self.shape = test_image.shape
         self.dtype = test_image.dtype
 
@@ -114,8 +126,11 @@ def imagenet_dataset(imagenet_path, scrath_dir, size, copy_files, is_correct_pha
     dataset = tf.data.Dataset.from_tensor_slices((imagenet_data.scratch_files_train, imagenet_data.train_labels))
 
     def load(path, label):
-        x = np.transpose(transform.resize((io.imread(path.decode()).astype(np.float32) - 127.5) / 127.5, (size, size)), [2, 0, 1])
-        y = label.astype(np.float32)
+        # x = np.transpose(transform.resize((io.imread(path.decode()).astype(np.float32) - 127.5) / 127.5, (size, size)), [2, 0, 1])
+        y = label
+        x = tf.io.read_file(path)
+        x = (tf.image.resize(tf.image.decode_jpeg(x, channels=3), [size, size]) - 127.5) / 127.5
+        x = tf.transpose(x, perm=[2, 0, 1])
         return x, y
 
     dataset = dataset.shuffle(len(imagenet_data))
@@ -125,8 +140,9 @@ def imagenet_dataset(imagenet_path, scrath_dir, size, copy_files, is_correct_pha
     else:
         parallel_calls = int(os.environ['OMP_NUM_THREADS'])
 
-    dataset = dataset.map(lambda path, label: tuple(tf.py_func(load, [path, label], [tf.float32, tf.float32])), num_parallel_calls=parallel_calls)
-    dataset = dataset.apply(tf.contrib.data.ignore_errors())
+    # dataset = dataset.map(lambda path, label: tuple(tf.py_func(load, [path, label], [tf.float32, tf.float32])), num_parallel_calls=parallel_calls)
+    dataset = dataset.map(load, num_parallel_calls=parallel_calls)
+    # dataset = dataset.apply(tf.contrib.data.ignore_errors())
     return dataset
 
 
@@ -176,20 +192,23 @@ if __name__ == '__main__':
     # npy_data = NumpyPathDataset('/lustre4/2/managed_datasets/LIDC-IDRI/npy/average/4x4/', '/scratch-local', copy_files=True,
     #                             is_correct_phase=True)
 
-    imagenet_data = ImageNetDataset('/lustre4/2/managed_datasets/imagenet-full/', scratch_dir='/', copy_files=False, is_correct_phase=True)
+    imagenet_data = ImageNetDataset('/nfs/managed_datasets/imagenet-full/', scratch_dir='/', copy_files=False, is_correct_phase=True)
 
-    dataset = tf.data.Dataset.from_tensor_slices((imagenet_data.train_examples, imagenet_data.train_labels))
+    dataset = tf.data.Dataset.from_tensor_slices((imagenet_data.scratch_files_train, imagenet_data.train_labels))
 
 
     def load(path, label):
-        x = transform.resize(io.imread(path.decode()).astype(np.float32) / 255, (255, 255))
-        y = label.astype(np.float32)
+        # x = np.transpose(transform.resize((io.imread(path.decode()).astype(np.float32) - 127.5) / 127.5, (size, size)), [2, 0, 1])
+        y = label
+        x = tf.io.read_file(path)
+        x = (tf.image.resize(tf.image.decode_jpeg(x, channels=3), [32, 32]) - 127.5) / 127.5
+        x = tf.transpose(x, perm=[2, 0, 1])
         return x, y
-
 
     # Lay out the graph.
     dataset = dataset.shuffle(len(imagenet_data))
-    dataset = dataset.map(lambda path, label: tuple(tf.py_func(load, [path, label], [tf.float32, tf.float32])), num_parallel_calls=int(os.environ['OMP_NUM_THREADS']))
+    # dataset = dataset.map(lambda path, label: tuple(tf.py_func(load, [path, label], [tf.float32, tf.float32])), num_parallel_calls=int(os.environ['OMP_NUM_THREADS']))
+    dataset = dataset.map(load, num_parallel_calls=AUTOTUNE)
     dataset = dataset.batch(256, drop_remainder=True)
     # dataset = dataset.prefetch(AUTOTUNE)
     # dataset = dataset.repeat()
