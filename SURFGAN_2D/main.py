@@ -287,8 +287,6 @@ def main(args, config):
             fake_image_grid = image_grid(fake_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
 
-            fake_image_grid = tf.clip_by_value(fake_image_grid, -1, 1)
-
             tf.summary.image('real_image', real_image_grid)
             tf.summary.image('fake_image', fake_image_grid)
 
@@ -628,7 +626,7 @@ if __name__ == '__main__':
                         type=float, help='discriminator annealing rate, 1 -> no annealing.')
     parser.add_argument('--num_metric_samples', type=int, default=512)
     parser.add_argument('--beta1', type=float, default=0)
-    parser.add_argument('--beta2', type=float, default=0.99)
+    parser.add_argument('--beta2', type=float, default=0.9)
     parser.add_argument('--ema_beta', type=float, default=0.99)
     parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
                         help='How to scale discriminator learning rate with horovod size.')
