@@ -1,0 +1,8 @@
+#/usr/bin/bash
+#SBATCH -N 2
+#SBATCH -n 4
+#SBATCH -p gpu
+#SBATCH -t 4:00:00
+
+source /home/davidr/tf_gpu.sh
+bash /home/davidr/projects/saraGAN/SURFGAN/scripts/run_single_node.sh
