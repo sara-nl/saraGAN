@@ -87,7 +87,7 @@ def main(args, config):
         # real_image_input = tf.squeeze(dataset.get_next(), axis=0)
         real_image_input, real_label = dataset.get_next()
         real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
-        real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+        # real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
@@ -678,7 +678,7 @@ if __name__ == '__main__':
     else:
         config = tf.ConfigProto(graph_options=gopts,
                                 intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
-                                inter_op_parallelism_threads=2,
+                                inter_op_parallelism_threads=4,
                                 allow_soft_placement=True,
                                 device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 
