@@ -5,24 +5,24 @@ import time
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
 
     with tf.variable_scope('residual'):
-        t = conv3d(x, filters_out, (1, 1, 1), activation, param=param)
-        t = downscale3d(t)
+        t = conv2d(x, filters_out, (1, 1), activation, param=param)
+        t = downscale2d(t)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_in, kernel, activation, param=param)
+        x = conv2d(x, filters_in, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
     with tf.variable_scope('conv_2'):
 
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_out, kernel, activation, param=param)
+        x = conv2d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
 
-    x = downscale3d(x)
+    x = downscale2d(x)
     x = (x + t) * (1 / calculate_gain(activation, param))
 
     return x
@@ -33,7 +33,7 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
         # x = minibatch_stddev_layer(x)
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_out, kernel, activation=activation, param=param)
+        x = conv2d(x, filters_out, kernel, activation=activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         with tf.variable_scope('dense_1'):

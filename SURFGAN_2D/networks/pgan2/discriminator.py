@@ -5,24 +5,24 @@ import time
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
 
     with tf.variable_scope('residual'):
-        t = conv3d(x, filters_out, (1, 1, 1), activation, param=param)
-        t = downscale3d(t)
+        t = conv2d(x, filters_out, (1, 1), activation, param=param)
+        t = downscale2d(t)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_in, kernel, activation, param=param)
+        x = conv2d(x, filters_in, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
     with tf.variable_scope('conv_2'):
 
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_out, kernel, activation, param=param)
+        x = conv2d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
 
-    x = downscale3d(x)
+    x = downscale2d(x)
     x = (x + t) * (1 / calculate_gain(activation, param))
 
     return x
@@ -33,7 +33,7 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
         # x = minibatch_stddev_layer(x)
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_out, kernel, activation=activation, param=param)
+        x = conv2d(x, filters_out, kernel, activation=activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         with tf.variable_scope('dense_1'):
@@ -69,13 +69,13 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
 
 
 if __name__ == '__main__':
-    num_phases = 8
+    num_phases = 7
     base_dim = 512
-    base_shape = [1, 1, 4, 4]
+    base_shape = [3, 4, 4]
     latent_dim = 512
-    for phase in range(8, 9):
+    for phase in range(7, 8):
         tf.reset_default_graph()
-        shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
+        shape = [1, 3] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         print(shape)
         x = tf.random.normal(shape=shape)
         y = discriminator(x, 0.5, phase, num_phases, base_dim, latent_dim, activation='leaky_relu', param=0.3)
