@@ -35,7 +35,7 @@ def modulated_conv2d(x, z, f, k, activation, up=False, demodulate=True, param=No
     return x
 
 
-def to_rgb(x, z, channels=1):
+def to_rgb(x, z, channels=3):
     x = modulated_conv2d(x, z, channels, (1, 1), activation='linear', demodulate=False)
     return apply_bias(x)
 

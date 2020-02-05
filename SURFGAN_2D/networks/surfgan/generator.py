@@ -33,7 +33,7 @@ def generator(z,
                 with tf.control_dependencies([update_op]):
                     d_z = tf.identity(d_z)
 
-        if is_training:
+        if is_training and phase > 1:
             z_reg = tf.random_normal(tf.shape(z))
             d_z_reg = g_mapping(z_reg, phase, is_reuse=True)
 

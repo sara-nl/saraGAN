@@ -121,6 +121,7 @@ def forward_simultaneous(generator,
                               base_dim, latent_dim, activation=activation, param=leakiness,
                               is_reuse=True, size=network_size, )
 
+    print(real_image_input.shape)
     gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1], minval=0., maxval=1.)
     interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
 
