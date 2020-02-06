@@ -174,6 +174,7 @@ def main(args, config):
                 args.network_size,
                 args.loss_fn,
                 args.gp_weight
+                conditioning=real_label
             )
 
             gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
@@ -208,7 +209,8 @@ def main(args, config):
                 args.leakiness,
                 args.network_size,
                 args.loss_fn,
-                args.gp_weight
+                args.gp_weight,
+                conditioning=real_label
             )
 
             disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
