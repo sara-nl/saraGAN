@@ -44,7 +44,9 @@ def generator_block(x, filters_out, d_z, layer_idx, activation, param=None):
         x = apply_bias(x, runtime_coef)
         x = act(x, activation, param)
 
-    return x + t
+    x = (x + t) * (1 / calculate_gain(activation, param))
+
+    return x
 
 
 def g_synthesis(d_z,
