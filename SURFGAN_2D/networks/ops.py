@@ -1,13 +1,11 @@
 import tensorflow as tf
 import numpy as np
 
-
 def k(x):
     if x < 3:
         return 1
     else:
         return 3
-
 
 def calculate_gain(activation, param=None):
     linear_fns = ['linear', 'conv1d', 'conv2d', 'conv3d', 'conv_transpose1d', 'conv_transpose2d', 'conv_transpose3d']

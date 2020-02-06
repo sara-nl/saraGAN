@@ -14,7 +14,7 @@ import os
 import importlib
 from rectified_adam import RAdamOptimizer
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
-
+import psutil
 from tensorflow.data.experimental import AUTOTUNE
 
 
@@ -304,9 +304,14 @@ def main(args, config):
 
             merged_summaries = tf.summary.merge_all()
 
-        with tf.Session(config=config) as sess:
+        # Other ops
+        init_op = tf.global_variables_initializer()
+        assign_starting_alpha = alpha.assign(args.starting_alpha)
+        assign_zero = alpha.assign(0)
+        broadcast = hvd.broadcast_global_variables(0)
 
-            sess.run(tf.global_variables_initializer())
+        with tf.Session(config=config) as sess:
+            sess.run(init_op)
 
             trainable_variable_names = [v.name for v in tf.trainable_variables()]
 
@@ -333,14 +338,14 @@ def main(args, config):
                 continue
 
             if phase == args.starting_phase:
-                sess.run(alpha.assign(args.starting_alpha))
+                sess.run(assign_starting_alpha)
             else:
                 sess.run(init_alpha)
 
             if verbose:
                 print(f"Begin mixing epochs in phase {phase}")
             if args.horovod:
-                sess.run(hvd.broadcast_global_variables(0))
+                sess.run(broadcast)
 
             local_step = 0
             # take_first_snapshot = True
@@ -349,7 +354,7 @@ def main(args, config):
                 start = time.time()
                 if local_step % 128 == 0 and local_step > 1:
                     if args.horovod:
-                        sess.run(hvd.broadcast_global_variables(0))
+                        sess.run(broadcast)
                     saver = tf.train.Saver(var_list)
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
@@ -363,14 +368,19 @@ def main(args, config):
                 end = time.time()
                 img_s = global_size * batch_size / (end - start)
                 if verbose:
+
                     writer.add_summary(summary, global_step)
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
+                                       global_step)
+                    memory_percentage = psutil.Process(os.getpid()).memory_percent()
+                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
                                        global_step)
 
                     print(f"Step {global_step:09} \t"
                           f"img/s {img_s:.2f} \t "
                           f"d_loss {d_loss:.4f} \t "
                           f"g_loss {g_loss:.4f} \t "
+                          f"memory {memory_percentage:.4f} % \t"
                           f"alpha {alpha.eval():.2f}")
 
                     # if take_first_snapshot:
@@ -404,7 +414,7 @@ def main(args, config):
             if verbose:
                 print(f"Begin stabilizing epochs in phase {phase}")
 
-            sess.run(alpha.assign(0))
+            sess.run(assign_zero)
 
             while True:
                 start = time.time()
@@ -412,7 +422,7 @@ def main(args, config):
                 if local_step % 128 == 0 and local_step > 0:
 
                     if args.horovod:
-                        sess.run(hvd.broadcast_global_variables(0))
+                        sess.run(broadcast)
                     saver = tf.train.Saver(var_list)
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
@@ -430,11 +440,15 @@ def main(args, config):
                     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                        global_step)
                     writer.add_summary(summary, global_step)
+                    memory_percentage = psutil.Process(os.getpid()).memory_percent()
+                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
+                                       global_step)
 
                     print(f"Step {global_step:09} \t"
                           f"img/s {img_s:.2f} \t "
                           f"d_loss {d_loss:.4f} \t "
                           f"g_loss {g_loss:.4f} \t "
+                          f"memory {memory_percentage:.4f} % \t"
                           f"alpha {alpha.eval():.2f}")
 
                 sess.run(ema_op)
@@ -639,6 +653,7 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', default=False, action='store_true')
     parser.add_argument('--use_adasum', default=False, action='store_true')
     parser.add_argument('--optim_strategy', default='simultaneous', choices=['simultaneous', 'alternate'])
+    parser.add_argument('--num_inter_ops', default=4, type=int)
     args = parser.parse_args()
 
     if args.network_size == 'small':
@@ -678,7 +693,7 @@ if __name__ == '__main__':
     else:
         config = tf.ConfigProto(graph_options=gopts,
                                 intra_op_parallelism_threads=int(os.environ['OMP_NUM_THREADS']),
-                                inter_op_parallelism_threads=4,
+                                inter_op_parallelism_threads=args.num_inter_ops,
                                 allow_soft_placement=True,
                                 device_count={'CPU': int(os.environ['OMP_NUM_THREADS'])})
 

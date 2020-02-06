@@ -76,6 +76,7 @@ def modulated_conv2d(x, z, f, k, activation, up=False, demodulate=True, param=No
 
     return x, runtime_coef
 
+
 def from_rgb(x, filters_out, activation, param=None):
     x, runtime_coef = conv2d(x, filters_out, (1, 1), activation, param)
     x = apply_bias(x, runtime_coef)

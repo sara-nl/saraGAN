@@ -15,9 +15,9 @@ def generator_in(d_z, base_dim, base_shape, activation, param=None):
     with tf.variable_scope('conv'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = modulated_conv3d(x, d_z[:, 0], base_dim, kernel, activation=activation, param=param)
-        x = apply_noise(x)
-        x = apply_bias(x)
+        x, runtime_coef = modulated_conv3d(x, d_z[:, 0], base_dim, kernel, activation=activation, param=param)
+        x = apply_noise(x, runtime_coef)
+        x = apply_bias(x, runtime_coef)
         x = act(x, activation, param)
     return x
 
@@ -27,17 +27,17 @@ def generator_block(x, filters_out, d_z, layer_idx, activation, param=None):
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = modulated_conv3d(x, d_z[:, layer_idx * 3 - 5], filters_out, kernel, activation=activation, up=True, param=param)
-        x = apply_noise(x)
-        x = apply_bias(x)
+        x, runtime_coef = modulated_conv3d(x, d_z[:, layer_idx * 3 - 5], filters_out, kernel, activation=activation, up=True, param=param)
+        x = apply_noise(x, runtime_coef)
+        x = apply_bias(x, runtime_coef)
         x = act(x, activation, param)
 
     with tf.variable_scope('conv_2'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = modulated_conv3d(x, d_z[:, layer_idx * 3 - 4], filters_out, kernel, activation=activation, param=param)
-        x = apply_noise(x)
-        x = apply_bias(x)
+        x, runtime_coef = modulated_conv3d(x, d_z[:, layer_idx * 3 - 4], filters_out, kernel, activation=activation, param=param)
+        x = apply_noise(x, runtime_coef)
+        x = apply_bias(x, runtime_coef)
         x = act(x, activation, param)
     return x
 
@@ -66,8 +66,12 @@ def g_synthesis(d_z,
                 x = generator_block(x, filters_out, d_z, layer_idx, activation=activation,
                                     param=param)
 
-            with tf.variable_scope(f'to_rgb_{layer_idx}'):
-                x_out = alpha * to_rgb(x, d_z[:, layer_idx * 3 - 3]) + upscale3d(x_out)
+            if layer_idx == phase:
+                with tf.variable_scope(f'to_rgb_{layer_idx}'):
+                    x_out = (1 - alpha) * to_rgb(x, d_z[:, layer_idx * 3 - 3]) + upscale2d(x_out)
+            else:
+                with tf.variable_scope(f'to_rgb_{layer_idx}'):
+                    x_out = to_rgb(x, d_z[:, layer_idx * 3 - 3]) + upscale2d(x_out)
 
         return x_out
 

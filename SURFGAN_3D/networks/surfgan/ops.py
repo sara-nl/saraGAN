@@ -55,8 +55,8 @@ def modulated_conv3d(x, z, f, k, activation, up=False, demodulate=True, param=No
 
     # Modulate.
     with tf.variable_scope('modulate'):
-        s = dense(z, fmaps=x.shape[1].value, activation=activation, param=param)
-        s = apply_bias(s, runtime_coef) + 1
+        s, runtime_coef_dense = dense(z, fmaps=x.shape[1].value, activation=activation, param=param)
+        s = apply_bias(s, runtime_coef_dense) + 1
         s = act(s, activation, param)
         ww = ww * s[:, np.newaxis, np.newaxis, np.newaxis, :, np.newaxis]
 
