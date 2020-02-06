@@ -72,11 +72,11 @@ class ImageNetDataset:
                 self.scratch_files_test.append(os.path.normpath(scratch_dir + f))
 
         while not all(os.path.exists(f) for f in self.scratch_files_train):
-            print("Waiting...")
+            print(f"Waiting... {sum(os.path.exists(f) for f in self.scratch_files_train)} / {len(self.scratch_files_train)}")
             time.sleep(1)
 
         while not all(os.path.exists(f) for f in self.scratch_files_test):
-            print("Waiting...")
+            print(f"Waiting... {sum(os.path.exists(f) for f in self.scratch_files_test)} / {len(self.scratch_files_test)}")
             time.sleep(1)
 
         if is_correct_phase:
