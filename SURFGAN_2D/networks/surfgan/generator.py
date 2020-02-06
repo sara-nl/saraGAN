@@ -12,6 +12,7 @@ def generator(z,
               base_dim,
               base_shape,
               activation,
+              conditioning=None,
               is_training=True,
               param=None,
               truncation_psi=None, truncation_layers=8, beta=0.995, style_mixing_prob=0.9,
@@ -24,7 +25,7 @@ def generator(z,
 
         d_z_avg = tf.get_variable('d_z_avg', shape=z.get_shape().as_list()[1], initializer=tf.initializers.zeros(),
                                   trainable=False)
-        d_z = g_mapping(z, phase)
+        d_z = g_mapping(z, phase, conditioning=conditioning)
 
         if is_training:
             with tf.variable_scope('d_z_avg'):
