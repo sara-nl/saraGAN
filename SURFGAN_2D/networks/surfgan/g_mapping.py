@@ -19,6 +19,7 @@ def g_mapping(
 
         if conditioning is not None:
             with tf.variable_scope('conditioning'):
+                print(conditioning.shape, z.shape)
                 w = tf.get_variable('weight', shape=[conditioning.shape[1], z.shape[1]], initializer=tf.initializers.random_normal())
                 y = tf.matmul(conditioning, w)
                 z = tf.concat([z, y], axis=1)

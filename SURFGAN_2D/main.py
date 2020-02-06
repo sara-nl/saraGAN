@@ -66,7 +66,7 @@ def main(args, config):
                                        copy_files=local_rank == 0,
                                        is_correct_phase=phase >= args.starting_phase,
                                        gpu=args.gpu,
-                                       num_labels=min(1, args.num_labels))
+                                       num_labels=1 if args.num_labels is None else args.num_labels)
         else:
             raise ValueError(f"Unknown dataset {args.dataset_path}")
 
@@ -95,7 +95,7 @@ def main(args, config):
         real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
         # real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
-        real_image_input = tf.one_hot(real_label, depth=args.num_labels)
+        real_label = tf.one_hot(real_label, depth=args.num_labels)
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
@@ -182,7 +182,7 @@ def main(args, config):
                 args.network_size,
                 args.loss_fn,
                 args.gp_weight,
-                conditioning=real_label
+                conditioning=real_label,
             )
 
             gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
