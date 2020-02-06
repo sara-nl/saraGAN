@@ -119,8 +119,8 @@ class ImageNetDataset:
             return len(self.test_labels)
 
 
-def imagenet_dataset(imagenet_path, scrath_dir, size, copy_files, is_correct_phase, gpu=False):
-    imagenet_data = ImageNetDataset(imagenet_path, scratch_dir=scrath_dir, copy_files=copy_files, is_correct_phase=is_correct_phase)
+def imagenet_dataset(imagenet_path, scrath_dir, size, copy_files, is_correct_phase, gpu=False, num_labels=999):
+    imagenet_data = ImageNetDataset(imagenet_path, scratch_dir=scrath_dir, copy_files=copy_files, is_correct_phase=is_correct_phase, num_classes=num_labels)
 
     dataset = tf.data.Dataset.from_tensor_slices((imagenet_data.scratch_files_train, imagenet_data.train_labels))
 

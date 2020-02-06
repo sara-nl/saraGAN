@@ -60,7 +60,13 @@ def main(args, config):
 
         size = 2 * 2 ** phase
         if args.dataset == 'imagenet':
-            dataset = imagenet_dataset(args.dataset_path, args.scratch_path, size, copy_files=local_rank == 0, is_correct_phase=phase >= args.starting_phase, gpu=args.gpu)
+            dataset = imagenet_dataset(args.dataset_path,
+                                       args.scratch_path,
+                                       size,
+                                       copy_files=local_rank == 0,
+                                       is_correct_phase=phase >= args.starting_phase,
+                                       gpu=args.gpu,
+                                       num_labels=min(1, args.num_labels))
         else:
             raise ValueError(f"Unknown dataset {args.dataset_path}")
 
@@ -88,6 +94,8 @@ def main(args, config):
         real_image_input, real_label = dataset.get_next()
         real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
         # real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+
+        real_image_input = tf.one_hot(real_label, depth=args.num_labels)
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
@@ -656,6 +664,7 @@ if __name__ == '__main__':
     parser.add_argument('--use_adasum', default=False, action='store_true')
     parser.add_argument('--optim_strategy', default='simultaneous', choices=['simultaneous', 'alternate'])
     parser.add_argument('--num_inter_ops', default=4, type=int)
+    parser.add_argument('--num_labels', default=None, type=int)
     args = parser.parse_args()
 
     if args.network_size == 'small':
