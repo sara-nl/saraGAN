@@ -27,14 +27,50 @@ def calculate_gain(activation, param=None):
         raise ValueError("Unsupported nonlinearity {}".format(activation))
 
 
-def get_weight(shape, activation, lrmul=1, param=None):
+def spectral_norm(w, iteration=1):
+    w_shape = w.shape.as_list()
+    w = tf.reshape(w, [-1, w_shape[-1]])
+
+    u = tf.get_variable("u", [1, w_shape[-1]], initializer=tf.random_normal_initializer(), trainable=False)
+
+    u_hat = u
+    v_hat = None
+    for i in range(iteration):
+        """
+        power iteration
+        Usually iteration = 1 will be enough
+        """
+        v_ = tf.matmul(u_hat, tf.transpose(w))
+        v_hat = tf.nn.l2_normalize(v_)
+
+        u_ = tf.matmul(v_hat, w)
+        u_hat = tf.nn.l2_normalize(u_)
+
+    u_hat = tf.stop_gradient(u_hat)
+    v_hat = tf.stop_gradient(v_hat)
+
+    sigma = tf.matmul(tf.matmul(v_hat, w), tf.transpose(u_hat))
+
+    with tf.control_dependencies([u.assign(u_hat)]):
+        w_norm = w / sigma
+        w_norm = tf.reshape(w_norm, w_shape)
+
+    return w_norm
+
+
+def get_weight(shape, activation, lrmul=1, use_eq_lr=True, use_spectral_norm=False, param=None):
     fan_in = np.prod(shape[:-1])
     gain = calculate_gain(activation, param)
     he_std = gain / np.sqrt(fan_in)
-    init_std = 1.0 / lrmul
-    runtime_coef = he_std * lrmul
-    return tf.get_variable('weight', shape=shape,
-                           initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef
+    runtime_coef = he_std * lrmul if use_eq_lr else lrmul
+    init_std = 1.0 / runtime_coef
+    w = tf.get_variable('weight', shape=shape,
+                        initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef
+
+    if use_spectral_norm:
+        w = spectral_norm(w)
+
+    return w
 
 
 def apply_bias(x, lrmul=1):
@@ -45,18 +81,6 @@ def apply_bias(x, lrmul=1):
     else:
         return x + tf.reshape(b, [1, -1, 1, 1])
 
-def spectral_norm(weight):
-    w_mat = tf.reshape(weight, [weight.shape[0], -1])
-
-    u = tf.random.normal(1, weight.shape[-1])
-    sv = 1
-
-    # Power Iteration
-    us, vs, svs = [], [], []
-    v = tf.matmul()
-
-
-    v = tf.stop_gradient()
 
 
 

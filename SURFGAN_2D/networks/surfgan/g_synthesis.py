@@ -26,7 +26,7 @@ def generator_block(x, filters_out, d_z, layer_idx, activation, param=None):
 
     with tf.variable_scope('skip'):
         t = upscale2d(x, 2)
-        t, runtime_coef = conv2d(x, filters_out, (1, 1), activation, param)
+        t, runtime_coef = conv2d(t, filters_out, (1, 1), activation, param)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
@@ -44,7 +44,9 @@ def generator_block(x, filters_out, d_z, layer_idx, activation, param=None):
         x = apply_bias(x, runtime_coef)
         x = act(x, activation, param)
 
-    return x + t
+    x = (x + t) * (1 / calculate_gain(activation, param))
+
+    return x
 
 
 def g_synthesis(d_z,
