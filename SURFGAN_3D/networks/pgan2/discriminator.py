@@ -54,6 +54,8 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
         if is_reuse:
             scope.reuse_variables()
 
+        x_downscale = x
+
         with tf.variable_scope(f'from_rgb_{phase}'):
             filters_out = num_filters(phase, num_phases, base_dim, size=size)
             x = from_rgb(x, filters_out, activation, param=param)
@@ -63,6 +65,14 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
                 filters_in = num_filters(i, num_phases, base_dim, size=size)
                 filters_out = num_filters(i - 1, num_phases, base_dim, size=size)
                 x = discriminator_block(x, filters_in, filters_out, activation, param=param)
+
+            if i == phase:
+                with tf.variable_scope(f'from_rgb_{phase - 1}'):
+                    fromrgb_prev = from_rgb(
+                        downscale2d(x_downscale),
+                        filters_out, activation, param=param)
+
+                x = alpha * fromrgb_prev + (1 - alpha) * x
 
         x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, param)
         return x

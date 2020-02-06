@@ -72,7 +72,6 @@ class ImageNetDataset:
                 self.scratch_files_test.append(os.path.normpath(scratch_dir + f))
 
         while not all(os.path.exists(f) for f in self.scratch_files_train):
-            print(self.scratch_files_train)
             print("Waiting...")
             time.sleep(1)
 

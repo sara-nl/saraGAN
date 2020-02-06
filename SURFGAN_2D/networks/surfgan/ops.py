@@ -74,6 +74,8 @@ def modulated_conv2d(x, z, f, k, activation, up=False, demodulate=True, param=No
     if demodulate:
         x *= d[:, :, np.newaxis, np.newaxis]
 
+    return x, runtime_coef
+
 
 def from_rgb(x, filters_out, activation, param=None):
     x, runtime_coef = conv2d(x, filters_out, (1, 1), activation, param)

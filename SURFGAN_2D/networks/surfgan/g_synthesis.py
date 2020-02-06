@@ -81,7 +81,7 @@ if __name__ == '__main__':
     num_phases = 8
     base_dim = 512
     latent_size = 512
-    base_shape = (1, 1, 4, 4)
+    base_shape = (3, 4, 4)
 
     for phase in range(8, 9):
         tf.reset_default_graph()
