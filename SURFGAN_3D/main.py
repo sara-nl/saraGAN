@@ -44,6 +44,7 @@ def main(args, config):
         writer = None
 
     final_shape = parse_tuple(args.final_shape)
+    image_channels = final_shape[0]
     final_resolution = final_shape[-1]
     num_phases = int(np.log2(final_resolution) - 1)
 
@@ -86,16 +87,25 @@ def main(args, config):
             parallel_calls = int(os.environ['OMP_NUM_THREADS'])
 
         dataset = dataset.shuffle(len(npy_data))
-        # dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=parallel_calls)
         dataset = dataset.map(lambda x: tuple(tf.py_func(load, [x], [tf.float32])), num_parallel_calls=parallel_calls)
         dataset = dataset.batch(batch_size, drop_remainder=True)
-        # dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=parallel_calls)
         dataset = dataset.repeat()
-        # dataset = dataset.prefetch(AUTOTUNE)
+        dataset = dataset.prefetch(AUTOTUNE)
         dataset = dataset.make_one_shot_iterator()
-        real_image_input = tf.squeeze(dataset.get_next(), axis=0)
-        real_image_input = tf.ensure_shape(real_image_input, [batch_size] + list(npy_data.shape))
+        data = dataset.get_next()
+        if len(data) == 1:
+            real_image_input = data
+            real_label = None
+        elif len(data) == 2:
+            real_image_input, real_label = data
+        else:
+            raise NotImplementedError()
+
+        real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+
+        if real_label:
+            real_label = tf.one_hot(real_label, depth=args.num_labels)
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
@@ -164,7 +174,7 @@ def main(args, config):
             # noinspection PyTypeChecker
             update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
         zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
-        base_shape = (1, zdim_base, 4, 4)
+        base_shape = (image_channels, zdim_base, 4, 4)
 
         if args.optim_strategy == 'simultaneous':
             gen_loss, disc_loss, gp_loss, gen_sample = forward_simultaneous(

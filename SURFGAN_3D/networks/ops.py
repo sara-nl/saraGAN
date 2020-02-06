@@ -117,7 +117,7 @@ def num_filters(phase, num_phases, base_dim=None, size=None):
         filter_list = [1024, 1024, 256, 256, 256, 128, 64, 32]
     else:
         raise ValueError(f"Unknown size: {size}")
-    assert num_phases == len(filter_list)
+    filter_list = filter_list[-num_phases:]
     filters = filter_list[phase - 1]
     return filters
 

@@ -5,6 +5,7 @@ from networks.surfgan.ops import *  # No good coding style, but ensures to use t
 def g_mapping(
         z,
         phase,
+        conditioning=None,
         mapping_layers=8,
         mapping_fmaps=512,
         mapping_lrmul=.01,
@@ -15,6 +16,14 @@ def g_mapping(
     with tf.variable_scope('g_mapping') as scope:
         if is_reuse:
             scope.reuse_variables()
+
+        if conditioning is not None:
+            with tf.variable_scope('conditioning'):
+                print(conditioning.shape, z.shape)
+                w = tf.get_variable('weight', shape=[conditioning.shape[1], z.shape[1]], initializer=tf.initializers.random_normal())
+                y = tf.matmul(conditioning, w)
+                z = tf.concat([z, y], axis=1)
+
         x = z * tf.rsqrt(tf.reduce_mean(tf.square(z), axis=1, keepdims=True) + 1e-8)
 
         # Mapping layers.
@@ -36,7 +45,8 @@ if __name__ == '__main__':
 
     phase = 8
     latents_in = tf.random.normal(shape=[1, 1024])
-    dlatents = g_mapping(latents_in, phase)
+    labels = tf.random.normal(shape=[1, 10])
+    dlatents = g_mapping(latents_in, phase, conditioning=labels)
 
     with tf.Session() as sess:
 

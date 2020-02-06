@@ -29,7 +29,7 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
     return x
 
 
-def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
+def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param, conditioning=None):
     with tf.variable_scope(f'discriminator_out'):
         x = minibatch_stddev_layer(x)
         with tf.variable_scope('conv'):
@@ -38,14 +38,17 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
             x, runtime_coef = conv3d(x, filters_out, kernel, activation=activation, param=param)
             x = apply_bias(x, runtime_coef)
             x = act(x, activation, param=param)
-        with tf.variable_scope('dense'):
+        with tf.variable_scope('output'):
             x, runtime_coef = dense(x, 1, activation='linear')
             x = apply_bias(x, runtime_coef)
+
+            if conditioning is not None:
+                x = tf.reduce_sum(x * conditioning, axis=1, keepdims=True)
 
         return x
 
 
-def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation, param=None, is_reuse=False, size='medium'):
+def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation, conditioning=None, param=None, is_reuse=False, size='medium', ):
 
     with tf.variable_scope('discriminator') as scope:
 
@@ -72,7 +75,8 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
 
                 x = alpha * fromrgb_prev + (1 - alpha) * x
 
-        x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, param)
+        x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, param, conditioning)
+
         return x
 
 

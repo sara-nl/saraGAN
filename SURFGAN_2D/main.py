@@ -81,21 +81,24 @@ def main(args, config):
         if args.horovod:
             dataset.shard(hvd.size(), hvd.rank())
 
-        if args.gpu:
-            parallel_calls = AUTOTUNE
-        else:
-            parallel_calls = int(os.environ['OMP_NUM_THREADS'])
-
         dataset = dataset.batch(batch_size, drop_remainder=True)
         dataset = dataset.repeat()
         dataset = dataset.prefetch(AUTOTUNE)
         dataset = dataset.make_one_shot_iterator()
-        # real_image_input = tf.squeeze(dataset.get_next(), axis=0)
-        real_image_input, real_label = dataset.get_next()
-        real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
-        # real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+        data = dataset.get_next()
+        if len(data) == 1:
+            real_image_input = data
+            real_label = None
+        elif len(data) == 2:
+            real_image_input, real_label = data
+        else:
+            raise NotImplementedError()
 
-        real_label = tf.one_hot(real_label, depth=args.num_labels)
+        real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
+        real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+
+        if real_label:
+            real_label = tf.one_hot(real_label, depth=args.num_labels)
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
