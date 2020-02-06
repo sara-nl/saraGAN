@@ -2,15 +2,28 @@
 from networks.ops import *
 
 
-def get_weight(shape, activation, lrmul=1, param=None) -> tuple:
+# def get_weight(shape, activation, lrmul=1, param=None) -> tuple:
+#     fan_in = np.prod(shape[:-1])
+#     gain = calculate_gain(activation, param)
+#     he_std = gain / np.sqrt(fan_in)
+#     init_std = 1.0 / lrmul
+#     runtime_coef = he_std * lrmul
+#     return tf.get_variable('weight', shape=shape,
+#                            initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef, runtime_coef
+
+def get_weight(shape, activation, lrmul=1, use_eq_lr=True, use_spectral_norm=False, param=None):
     fan_in = np.prod(shape[:-1])
     gain = calculate_gain(activation, param)
     he_std = gain / np.sqrt(fan_in)
-    init_std = 1.0 / lrmul
-    runtime_coef = he_std * lrmul
-    return tf.get_variable('weight', shape=shape,
-                           initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef, runtime_coef
+    runtime_coef = he_std * lrmul if use_eq_lr else lrmul
+    init_std = 1.0 / runtime_coef
+    w = tf.get_variable('weight', shape=shape,
+                        initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef
 
+    if use_spectral_norm:
+        w = spectral_norm(w)
+
+    return w
 
 def apply_noise(x, runtime_coef):
     assert len(x.shape) == 4  # NCHW
