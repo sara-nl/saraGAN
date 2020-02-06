@@ -99,7 +99,7 @@ def main(args, config):
         real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
-        if real_label:
+        if real_label is not None:
             real_label = tf.one_hot(real_label, depth=args.num_labels)
 
         # ------------------------------------------------------------------------------------------#
