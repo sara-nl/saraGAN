@@ -173,7 +173,7 @@ def main(args, config):
                 args.leakiness,
                 args.network_size,
                 args.loss_fn,
-                args.gp_weight
+                args.gp_weight,
                 conditioning=real_label
             )
 
