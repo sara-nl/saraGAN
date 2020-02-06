@@ -36,7 +36,7 @@ def g_mapping(
                 x = act(x, activation, param=act_param)
 
         with tf.variable_scope('broadcast_latents'):
-            x = tf.tile(x[:, tf.newaxis], [1, phase * 3 - 2, 1])
+            x = tf.tile(x[:, tf.newaxis], [1, phase * 4 - 2, 1])
 
         return x
 
