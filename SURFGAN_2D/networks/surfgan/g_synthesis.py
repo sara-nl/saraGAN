@@ -25,8 +25,8 @@ def generator_in(d_z, base_dim, base_shape, activation, param=None):
 def generator_block(x, filters_out, d_z, layer_idx, activation, param=None):
 
     with tf.variable_scope('skip'):
-        t = upscale2d(x, 2)
         t, runtime_coef = conv2d(x, filters_out, (1, 1), activation, param)
+        t = upscale2d(t, 2)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
