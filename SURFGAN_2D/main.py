@@ -173,8 +173,8 @@ def main(args, config):
                 args.leakiness,
                 args.network_size,
                 args.loss_fn,
-                args.gp_weight
-                conditioning=real_label
+                args.gp_weight,
+                conditioning=real_label,
             )
 
             gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
