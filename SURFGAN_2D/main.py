@@ -634,7 +634,7 @@ if __name__ == '__main__':
     parser.add_argument('--ending_phase', type=int, default=None, required=True)
     parser.add_argument('--base_dim', type=int, default=None, required=True)
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
-    parser.add_argument('--network_size', default=None, choices=['small', 'medium', 'big'], required=True)
+    parser.add_argument('--network_size', default=None, choices=['xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl'], required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
     parser.add_argument('--base_batch_size', type=int, default=256, help='batch size used in phase 1')
     parser.add_argument('--max_global_batch_size', type=int, default=1024)
