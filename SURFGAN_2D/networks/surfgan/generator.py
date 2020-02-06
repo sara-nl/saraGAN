@@ -23,9 +23,10 @@ def generator(z,
         if is_reuse:
             scope.reuse_variables()
 
-        d_z_avg = tf.get_variable('d_z_avg', shape=z.get_shape().as_list()[1], initializer=tf.initializers.zeros(),
-                                  trainable=False)
         d_z = g_mapping(z, phase, conditioning=conditioning)
+
+        d_z_avg = tf.get_variable('d_z_avg', shape=d_z.get_shape().as_list()[-1], initializer=tf.initializers.zeros(),
+                                  trainable=False)
 
         if is_training:
             with tf.variable_scope('d_z_avg'):
@@ -36,7 +37,7 @@ def generator(z,
 
         if is_training and phase > 1:
             z_reg = tf.random_normal(tf.shape(z))
-            d_z_reg = g_mapping(z_reg, phase, is_reuse=True)
+            d_z_reg = g_mapping(z_reg, phase, is_reuse=True, conditioning=conditioning)
 
             layer_idx = np.arange(phase * 3 - 2)[np.newaxis, :, np.newaxis]
 
