@@ -24,14 +24,16 @@ def generator_in(d_z, base_dim, base_shape, activation, param=None):
 
 def generator_block(x, filters_out, d_z, layer_idx, activation, param=None):
 
-    with tf.variable_scope('skip'):
-        t, runtime_coef = conv2d(x, filters_out, (1, 1), activation, param)
-        t = upscale2d(t, 2)
+    if layer_idx == 2:
+        assert layer_idx * 4 - 6 == 2, layer_idx * 4 - 6
+
+    with tf.variable_scope('residual'):
+        t, runtime_coef = modulated_conv2d(x, d_z[:, layer_idx * 4 - 6], filters_out, (1, 1), activation=activation, up=True, param=param)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x, runtime_coef = modulated_conv2d(x, d_z[:, layer_idx * 3 - 5], filters_out, kernel, activation=activation, up=True, param=param)
+        x, runtime_coef = modulated_conv2d(x, d_z[:, layer_idx * 4 - 5], filters_out, kernel, activation=activation, up=True, param=param)
         x = apply_noise(x, runtime_coef)
         x = apply_bias(x, runtime_coef)
         x = act(x, activation, param)
@@ -39,7 +41,7 @@ def generator_block(x, filters_out, d_z, layer_idx, activation, param=None):
     with tf.variable_scope('conv_2'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x, runtime_coef = modulated_conv2d(x, d_z[:, layer_idx * 3 - 4], filters_out, kernel, activation=activation, param=param)
+        x, runtime_coef = modulated_conv2d(x, d_z[:, layer_idx * 4 - 4], filters_out, kernel, activation=activation, param=param)
         x = apply_noise(x, runtime_coef)
         x = apply_bias(x, runtime_coef)
         x = act(x, activation, param)
@@ -57,14 +59,14 @@ def g_synthesis(d_z,
                 base_shape,
                 activation,
                 param=None,
-                size='medium'):
+                size='m'):
 
     with tf.variable_scope('g_synthesis'):
 
         with tf.variable_scope('generator_in'):
             x = generator_in(d_z, base_dim, base_shape, activation, param)
 
-        x_out = to_rgb(x, d_z[:, 0])
+        x_out = to_rgb(x, d_z[:, 1])
 
         for layer_idx in range(2, phase + 1):
 
@@ -75,10 +77,12 @@ def g_synthesis(d_z,
 
             if layer_idx == phase:
                 with tf.variable_scope(f'to_rgb_{layer_idx}'):
-                    x_out = (1 - alpha) * to_rgb(x, d_z[:, layer_idx * 3 - 3]) + upscale2d(x_out)
+                    x_out = (1 - alpha) * to_rgb(x, d_z[:, layer_idx * 4 - 3]) + upscale2d(x_out)
             else:
                 with tf.variable_scope(f'to_rgb_{layer_idx}'):
-                    x_out = to_rgb(x, d_z[:, layer_idx * 3 - 3]) + upscale2d(x_out)
+                    x_out = to_rgb(x, d_z[:, layer_idx * 4 - 3]) + upscale2d(x_out)
+
+                    print(layer_idx * 4 - 3, d_z.shape)
 
         return x_out
 
@@ -92,7 +96,7 @@ if __name__ == '__main__':
 
     for phase in range(8, 9):
         tf.reset_default_graph()
-        latents_shape = (1, phase * 3 - 2, latent_size)
+        latents_shape = (1, phase * 4 - 2, latent_size)
         dlatents = tf.random.normal(shape=latents_shape)
         alpha = tf.Variable(0.5)
         img_out = g_synthesis(dlatents, alpha, phase, num_phases,

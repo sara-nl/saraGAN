@@ -58,7 +58,7 @@ def spectral_norm(w, iteration=1):
     return w_norm
 
 
-def get_weight(shape, activation, lrmul=1, use_eq_lr=True, use_spectral_norm=False, param=None):
+def get_weight(shape, activation, lrmul=1, use_eq_lr=False, use_spectral_norm=True, param=None):
     fan_in = np.prod(shape[:-1])
     gain = calculate_gain(activation, param)
     he_std = gain / np.sqrt(fan_in)
