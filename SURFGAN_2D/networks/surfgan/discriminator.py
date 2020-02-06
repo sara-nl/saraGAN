@@ -6,8 +6,8 @@ import time
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
 
     with tf.variable_scope('residual'):
-        t, runtime_coef = conv2d(x, filters_out, (1, 1), activation, param=param)
-        t = downscale2d(t)
+        t = downscale2d(x)
+        t, runtime_coef = conv2d(t, filters_out, (1, 1), activation, param=param)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]

@@ -45,6 +45,20 @@ def apply_bias(x, lrmul=1):
     else:
         return x + tf.reshape(b, [1, -1, 1, 1])
 
+def spectral_norm(weight):
+    w_mat = tf.reshape(weight, [weight.shape[0], -1])
+
+    u = tf.random.normal(1, weight.shape[-1])
+    sv = 1
+
+    # Power Iteration
+    us, vs, svs = [], [], []
+    v = tf.matmul()
+
+
+    v = tf.stop_gradient()
+
+
 
 def dense(x, fmaps, activation, lrmul=1, param=None):
     if len(x.shape) > 2:

@@ -61,7 +61,6 @@ class ImageNetDataset:
             if copy_files:
                 print("All Files Copied")
 
-        if is_correct_phase:
             print("Copying test files to scratch...")
             for f in sorted(test_examples):
                 if copy_files:
