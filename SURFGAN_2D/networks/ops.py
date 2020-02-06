@@ -186,14 +186,14 @@ def minibatch_stddev_layer(x, group_size=4):
     with tf.variable_scope('minibatch_std'):
         group_size = tf.minimum(group_size, tf.shape(x)[0])
         s = x.shape
-        y = tf.reshape(x, [group_size, -1, s[1], s[2], s[3], s[4]])
+        y = tf.reshape(x, [group_size, -1, s[1], s[2], s[3]])
         y = tf.cast(y, tf.float32)
         y -= tf.reduce_mean(y, axis=0, keepdims=True)
         y = tf.reduce_mean(tf.square(y), axis=0)
         y = tf.sqrt(y + 1e-8)
-        y = tf.reduce_mean(y, axis=[1, 2, 3, 4], keepdims=True)
+        y = tf.reduce_mean(y, axis=[1, 2, 3], keepdims=True)
         y = tf.cast(y, x.dtype)
-        y = tf.tile(y, [group_size, 1, s[2], s[3], s[4]])
+        y = tf.tile(y, [group_size, 1, s[2], s[3]])
         return tf.concat([x, y], axis=1)
 
 
