@@ -16,6 +16,7 @@ from rectified_adam import RAdamOptimizer
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
 import psutil
 from tensorflow.data.experimental import AUTOTUNE
+from networks.ops import num_filters
 
 
 def main(args, config):
@@ -47,6 +48,7 @@ def main(args, config):
     image_channels = final_shape[0]
     final_resolution = final_shape[-1]
     num_phases = int(np.log2(final_resolution) - 1)
+    base_dim = num_filters(1, num_phases, size=args.network_size)
 
     var_list = list()
     global_step = 0
@@ -178,7 +180,7 @@ def main(args, config):
                 alpha,
                 phase,
                 num_phases,
-                args.base_dim,
+                base_dim,
                 base_shape,
                 args.activation,
                 args.leakiness,
@@ -214,7 +216,7 @@ def main(args, config):
                 alpha,
                 phase,
                 num_phases,
-                args.base_dim,
+                base_dim,
                 base_shape,
                 args.activation,
                 args.leakiness,
@@ -240,7 +242,7 @@ def main(args, config):
                     alpha,
                     phase,
                     num_phases,
-                    args.base_dim,
+                    base_dim,
                     base_shape,
                     args.activation,
                     args.leakiness,
@@ -632,7 +634,6 @@ if __name__ == '__main__':
     parser.add_argument('final_shape', type=str, help="'(c, y, x)', e.g. '(3, 128, 128)'")
     parser.add_argument('--starting_phase', type=int, default=None, required=True)
     parser.add_argument('--ending_phase', type=int, default=None, required=True)
-    parser.add_argument('--base_dim', type=int, default=None, required=True)
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
     parser.add_argument('--network_size', default=None, choices=['xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl'], required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
@@ -669,17 +670,6 @@ if __name__ == '__main__':
     parser.add_argument('--num_inter_ops', default=4, type=int)
     parser.add_argument('--num_labels', default=None, type=int)
     args = parser.parse_args()
-
-    if args.network_size == 'small':
-        assert args.latent_dim == args.base_dim == 256
-    elif args.network_size == 'medium':
-        assert args.latent_dim == 512
-        assert args.base_dim == 512
-    elif args.network_size == 'big':
-        assert args.latent_dim == 512
-        assert args.base_dim == 1024
-    else:
-        raise ValueError("Unknown network size ", args.network_size)
 
     if args.horovod:
         hvd.init()
