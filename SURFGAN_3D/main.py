@@ -106,6 +106,7 @@ def main(args, config):
 
         zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
         base_shape = (image_channels, zdim_base, 4, 4)
+        real_image_input = tf.squeeze(real_image_input, axis=0)
         real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, *[size * 2 ** (phase - 1) for size in base_shape[1:]]])
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
