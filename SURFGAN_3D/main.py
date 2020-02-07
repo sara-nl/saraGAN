@@ -15,6 +15,7 @@ import importlib
 from rectified_adam import RAdamOptimizer
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
 import psutil
+from networks.ops import num_filters
 from tensorflow.data.experimental import AUTOTUNE
 
 
