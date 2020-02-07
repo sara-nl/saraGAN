@@ -61,6 +61,7 @@ def main(args, config):
         # DATASET
 
         size = 2 * 2 ** phase
+
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
         npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=local_rank == 0,
                                     is_correct_phase=phase >= args.starting_phase)
@@ -103,7 +104,9 @@ def main(args, config):
         else:
             raise NotImplementedError()
 
-        real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
+        zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
+        base_shape = (image_channels, zdim_base, 4, 4)
+        real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, *[2 * 2 ** size for size in base_shape[1:]]])
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
         if real_label is not None:
@@ -175,8 +178,6 @@ def main(args, config):
             alpha_update = 1 / num_steps
             # noinspection PyTypeChecker
             update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
-        zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
-        base_shape = (image_channels, zdim_base, 4, 4)
 
         if args.optim_strategy == 'simultaneous':
             gen_loss, disc_loss, gp_loss, gen_sample = forward_simultaneous(
