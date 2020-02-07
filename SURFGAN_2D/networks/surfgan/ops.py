@@ -45,6 +45,9 @@ def apply_bias(x, runtime_coef):
 def dense(x, fmaps, activation, lrmul=1, param=None):
     if len(x.shape) > 2:
         x = tf.reshape(x, [-1, np.prod([d.value for d in x.shape[1:]])])
+    print(x)
+    print(x.shape)
+    print(x.shape[1].value)
     w, runtime_coef = get_weight([x.shape[1].value, fmaps], activation, lrmul=lrmul, param=param)
     w = tf.cast(w, x.dtype)
     return tf.matmul(x, w), runtime_coef
