@@ -82,7 +82,7 @@ def g_synthesis(d_z,
                 with tf.variable_scope(f'to_rgb_{layer_idx}'):
                     x_out = to_rgb(x, d_z[:, layer_idx * 4 - 3]) + upscale2d(x_out)
 
-        return tf.math.tanh(x_out)
+        return x_out
 
 
 if __name__ == '__main__':

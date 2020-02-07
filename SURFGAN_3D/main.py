@@ -47,6 +47,7 @@ def main(args, config):
     image_channels = final_shape[0]
     final_resolution = final_shape[-1]
     num_phases = int(np.log2(final_resolution) - 1)
+    base_dim = num_filters(1, num_phases, size=args.network_size)
 
     var_list = list()
     global_step = 0
@@ -104,7 +105,7 @@ def main(args, config):
         real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, size, size])
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
 
-        if real_label:
+        if real_label is not None:
             real_label = tf.one_hot(real_label, depth=args.num_labels)
 
         # ------------------------------------------------------------------------------------------#
@@ -185,7 +186,7 @@ def main(args, config):
                 alpha,
                 phase,
                 num_phases,
-                args.base_dim,
+                base_dim,
                 base_shape,
                 args.activation,
                 args.leakiness,
@@ -226,7 +227,8 @@ def main(args, config):
                 args.leakiness,
                 args.network_size,
                 args.loss_fn,
-                args.gp_weight
+                args.gp_weight,
+                conditioning=real_label
             )
 
             disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
@@ -245,7 +247,7 @@ def main(args, config):
                     alpha,
                     phase,
                     num_phases,
-                    args.base_dim,
+                    base_dim,
                     base_shape,
                     args.activation,
                     args.leakiness,
@@ -636,12 +638,11 @@ if __name__ == '__main__':
     parser.add_argument('final_shape', type=str, help="'(c, z, y, x)', e.g. '(1, 64, 128, 128)'")
     parser.add_argument('--starting_phase', type=int, default=None, required=True)
     parser.add_argument('--ending_phase', type=int, default=None, required=True)
-    parser.add_argument('--base_dim', type=int, default=None, required=True)
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
-    parser.add_argument('--network_size', default=None, choices=['small', 'medium', 'big'], required=True)
+    parser.add_argument('--network_size', default=None, choices=['xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl'], required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
-    parser.add_argument('--base_batch_size', type=int, default=128, help='batch size used in phase 1')
-    parser.add_argument('--max_global_batch_size', type=int, default=512)
+    parser.add_argument('--base_batch_size', type=int, default=256, help='batch size used in phase 1')
+    parser.add_argument('--max_global_batch_size', type=int, default=256)
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 18)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 18)
     parser.add_argument('--g_lr', type=float, default=1e-3)
@@ -669,20 +670,10 @@ if __name__ == '__main__':
     parser.add_argument('--starting_alpha', default=1, type=float)
     parser.add_argument('--gpu', default=False, action='store_true')
     parser.add_argument('--use_adasum', default=False, action='store_true')
-    parser.add_argument('--optim_strategy', default='simultaneous', choices=['simultaneous', 'alternate']) 
+    parser.add_argument('--optim_strategy', default='simultaneous', choices=['simultaneous', 'alternate'])
     parser.add_argument('--num_inter_ops', default=4, type=int)
+    parser.add_argument('--num_labels', default=None, type=int)
     args = parser.parse_args()
-
-    if args.network_size == 'small':
-        assert args.latent_dim == args.base_dim == 256
-    elif args.network_size == 'medium':
-        assert args.latent_dim == 512
-        assert args.base_dim == 512
-    elif args.network_size == 'big':
-        assert args.latent_dim == 512
-        assert args.base_dim == 1024
-    else:
-        raise ValueError("Unknown network size ", args.network_size)
 
     if args.horovod:
         hvd.init()
@@ -697,7 +688,7 @@ if __name__ == '__main__':
         tf.random.set_random_seed(args.seed)
         random.seed(args.seed)
 
-    if args.architecture in ('stylegan2', 'pgan2'):
+    if args.architecture in ('stylegan2'):
         assert args.starting_phase == args.ending_phase
 
     gopts = tf.GraphOptions(place_pruned_graph=True)

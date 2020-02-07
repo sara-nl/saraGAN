@@ -24,6 +24,12 @@ def generator_in(d_z, base_dim, base_shape, activation, param=None):
 
 def generator_block(x, filters_out, d_z, layer_idx, activation, param=None):
 
+    if layer_idx == 2:
+        assert layer_idx * 4 - 6 == 2, layer_idx * 4 - 6
+
+    with tf.variable_scope('residual'):
+        t, runtime_coef = modulated_conv3d(x, d_z[:, layer_idx * 4 - 6], filters_out, (1, 1, 1), activation=activation, up=True, param=param)
+
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
@@ -39,6 +45,9 @@ def generator_block(x, filters_out, d_z, layer_idx, activation, param=None):
         x = apply_noise(x, runtime_coef)
         x = apply_bias(x, runtime_coef)
         x = act(x, activation, param)
+
+    x = (x + t) * (1 / calculate_gain(activation, param))
+
     return x
 
 
@@ -50,14 +59,14 @@ def g_synthesis(d_z,
                 base_shape,
                 activation,
                 param=None,
-                size='medium'):
+                size='m'):
 
     with tf.variable_scope('g_synthesis'):
 
         with tf.variable_scope('generator_in'):
             x = generator_in(d_z, base_dim, base_shape, activation, param)
 
-        x_out = to_rgb(x, d_z[:, 0])
+        x_out = to_rgb(x, d_z[:, 1])
 
         for layer_idx in range(2, phase + 1):
 
@@ -68,10 +77,10 @@ def g_synthesis(d_z,
 
             if layer_idx == phase:
                 with tf.variable_scope(f'to_rgb_{layer_idx}'):
-                    x_out = (1 - alpha) * to_rgb(x, d_z[:, layer_idx * 3 - 3]) + upscale3d(x_out)
+                    x_out = (1 - alpha) * to_rgb(x, d_z[:, layer_idx * 4 - 3]) + upscale3d(x_out)
             else:
                 with tf.variable_scope(f'to_rgb_{layer_idx}'):
-                    x_out = to_rgb(x, d_z[:, layer_idx * 3 - 3]) + upscale3d(x_out)
+                    x_out = to_rgb(x, d_z[:, layer_idx * 4 - 3]) + upscale3d(x_out)
 
         return x_out
 

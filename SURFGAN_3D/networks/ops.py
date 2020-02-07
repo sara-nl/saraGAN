@@ -27,14 +27,54 @@ def calculate_gain(activation, param=None):
         raise ValueError("Unsupported nonlinearity {}".format(activation))
 
 
-def get_weight(shape, activation, lrmul=1, param=None):
+def spectral_norm(w, iteration=1):
+    w_shape = w.shape.as_list()
+    w = tf.reshape(w, [-1, w_shape[-1]])
+
+    u = tf.get_variable("u", [1, w_shape[-1]], initializer=tf.random_normal_initializer(), trainable=False)
+
+    u_hat = u
+    v_hat = None
+    for i in range(iteration):
+        """
+        power iteration
+        Usually iteration = 1 will be enough
+        """
+        v_ = tf.matmul(u_hat, tf.transpose(w))
+        v_hat = tf.nn.l2_normalize(v_)
+
+        u_ = tf.matmul(v_hat, w)
+        u_hat = tf.nn.l2_normalize(u_)
+
+    u_hat = tf.stop_gradient(u_hat)
+    v_hat = tf.stop_gradient(v_hat)
+
+    sigma = tf.matmul(tf.matmul(v_hat, w), tf.transpose(u_hat))
+
+    with tf.control_dependencies([u.assign(u_hat)]):
+        w_norm = w / sigma
+        w_norm = tf.reshape(w_norm, w_shape)
+
+    return w_norm
+
+
+def get_weight(shape, activation, lrmul=1, use_eq_lr=True, use_spectral_norm=False, param=None):
     fan_in = np.prod(shape[:-1])
     gain = calculate_gain(activation, param)
     he_std = gain / np.sqrt(fan_in)
     init_std = 1.0 / lrmul
     runtime_coef = he_std * lrmul
-    return tf.get_variable('weight', shape=shape,
-                           initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef
+
+    w = tf.get_variable('weight', shape=shape,
+                        initializer=tf.initializers.random_normal(0, init_std))
+
+    if use_eq_lr:
+        w = w * runtime_coef
+
+    if use_spectral_norm:
+        w = spectral_norm(w)
+
+    return w
 
 
 def apply_bias(x, lrmul=1):
@@ -109,12 +149,20 @@ def act(x, activation, param=None):
 
 
 def num_filters(phase, num_phases, base_dim=None, size=None):
-    if size == 'small':
-        filter_list = [256, 256, 64, 64, 64, 32, 16, 8]
-    elif size == 'medium':
-        filter_list = [512, 512, 128, 128, 128, 64, 32, 16]
-    elif size == 'big':
-        filter_list = [1024, 1024, 256, 256, 256, 128, 64, 32]
+    if size == 'xxs':
+        filter_list = [64, 64, 64, 64, 64, 64, 64, 64, 32, 16, 8, 4, 2]
+    elif size == 'xs':
+        filter_list = [128, 128, 128, 128, 128, 128, 128, 128, 64, 32, 16, 8, 4]
+    elif size == 's':
+        filter_list = [256, 256, 256, 256, 256, 256, 256, 256, 128, 64, 32, 16, 8]
+    elif size == 'm':
+        filter_list = [512, 512, 512, 512, 512, 512, 512, 512, 256, 128, 64, 32, 16]
+    elif size == 'l':
+        filter_list = [512, 512, 512, 512, 512, 512, 512, 512, 512, 256, 128, 64, 32]
+    elif size == 'xl':
+        filter_list = [1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 512, 256, 128, 64]
+    elif size == 'xxl':
+        filter_list = [2048, 2048, 2048, 2048, 2048, 2048, 2048, 2048, 2048, 1024, 512, 256, 128]
     else:
         raise ValueError(f"Unknown size: {size}")
     filter_list = filter_list[-num_phases:]

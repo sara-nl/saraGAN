@@ -58,14 +58,18 @@ def spectral_norm(w, iteration=1):
     return w_norm
 
 
-def get_weight(shape, activation, lrmul=1, use_eq_lr=False, use_spectral_norm=True, param=None):
+def get_weight(shape, activation, lrmul=1, use_eq_lr=True, use_spectral_norm=False, param=None):
     fan_in = np.prod(shape[:-1])
     gain = calculate_gain(activation, param)
     he_std = gain / np.sqrt(fan_in)
-    runtime_coef = he_std * lrmul if use_eq_lr else lrmul
-    init_std = 1.0 / runtime_coef
+    init_std = 1.0 / lrmul
+    runtime_coef = he_std * lrmul
+
     w = tf.get_variable('weight', shape=shape,
-                        initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef
+                        initializer=tf.initializers.random_normal(0, init_std))
+
+    if use_eq_lr:
+        w = w * runtime_coef
 
     if use_spectral_norm:
         w = spectral_norm(w)

@@ -18,7 +18,10 @@ def get_weight(shape, activation, lrmul=1, use_eq_lr=True, use_spectral_norm=Fal
     runtime_coef = he_std * lrmul if use_eq_lr else lrmul
     init_std = 1.0 / lrmul
     w = tf.get_variable('weight', shape=shape,
-                        initializer=tf.initializers.random_normal(0, init_std)) * runtime_coef
+                        initializer=tf.initializers.random_normal(0, init_std))
+
+    if use_eq_lr:
+        w *= runtime_coef
 
     if use_spectral_norm:
         w = spectral_norm(w)
@@ -45,9 +48,6 @@ def apply_bias(x, runtime_coef):
 def dense(x, fmaps, activation, lrmul=1, param=None):
     if len(x.shape) > 2:
         x = tf.reshape(x, [-1, np.prod([d.value for d in x.shape[1:]])])
-    print(x)
-    print(x.shape)
-    print(x.shape[1].value)
     w, runtime_coef = get_weight([x.shape[1].value, fmaps], activation, lrmul=lrmul, param=param)
     w = tf.cast(w, x.dtype)
     return tf.matmul(x, w), runtime_coef
