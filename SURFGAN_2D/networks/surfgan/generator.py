@@ -39,19 +39,19 @@ def generator(z,
             z_reg = tf.random_normal(tf.shape(z))
             d_z_reg = g_mapping(z_reg, phase, is_reuse=True, conditioning=conditioning)
 
-            layer_idx = np.arange(phase * 3 - 2)[np.newaxis, :, np.newaxis]
+            layer_idx = np.arange(phase * 4 - 2)[np.newaxis, :, np.newaxis]
 
             mixing_cutoff = tf.cond(
                 tf.random_uniform([], 0.0, 1.0) < style_mixing_prob,
                 lambda: tf.random_uniform([], 1, phase, dtype=tf.int32),
-                lambda: phase * 3 - 2)
+                lambda: phase * 4 - 2)
 
             d_z = tf.where(tf.broadcast_to(layer_idx < mixing_cutoff, tf.shape(d_z)), d_z, d_z_reg)
 
         # Apply truncation trick.
         if not is_training and truncation_psi is not None:
             with tf.variable_scope('truncation'):
-                layer_idx = np.arange(phase * 3 - 2)[np.newaxis, :, np.newaxis]
+                layer_idx = np.arange(phase * 4 - 2)[np.newaxis, :, np.newaxis]
                 ones = np.ones(layer_idx.shape, dtype=np.float32)
                 coefs = tf.where(layer_idx < truncation_layers, truncation_psi * ones, ones)
                 d_z = coefs * d_z + (1 - coefs) * d_z_avg
