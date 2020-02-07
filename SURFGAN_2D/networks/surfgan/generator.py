@@ -51,7 +51,7 @@ def generator(z,
         # Apply truncation trick.
         if not is_training and truncation_psi is not None:
             with tf.variable_scope('truncation'):
-                layer_idx = np.arange(phase * 3 - 2)[np.newaxis, :, np.newaxis]
+                layer_idx = np.arange(phase * 4 - 2)[np.newaxis, :, np.newaxis]
                 ones = np.ones(layer_idx.shape, dtype=np.float32)
                 coefs = tf.where(layer_idx < truncation_layers, truncation_psi * ones, ones)
                 d_z = coefs * d_z + (1 - coefs) * d_z_avg
