@@ -17,6 +17,9 @@ from networks.loss import forward_simultaneous, forward_generator, forward_discr
 import psutil
 from tensorflow.data.experimental import AUTOTUNE
 from networks.ops import num_filters
+from lamb_tf1 import LAMB
+from tensorflow.contrib.opt import LARSOptimizer
+from optim import create_optimizer, LAMBOptimizer, AdamWeightDecayOptimizer
 
 
 def main(args, config):
@@ -127,33 +130,40 @@ def main(args, config):
             else:
                 raise ValueError(args.d_scaling)
 
-        d_lr = tf.Variable(d_lr, name='d_lr', dtype=tf.float32)
-        g_lr = tf.Variable(g_lr, name='g_lr', dtype=tf.float32)
+        # d_lr = tf.Variable(d_lr, name='d_lr', dtype=tf.float32)
+        # g_lr = tf.Variable(g_lr, name='g_lr', dtype=tf.float32)
 
-        optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-        optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
-        # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
-        # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
-        # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
-        # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
-        # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-        # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+        # # optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        # # optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+        # # optimizer_gen = LAMB(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        # # optimizer_disc = LAMB(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+        # # optimizer_gen = LARSOptimizer(learning_rate=g_lr, momentum=0, weight_decay=0)
+        # # optimizer_disc = LARSOptimizer(learning_rate=d_lr, momentum=0, weight_decay=0)
 
-        lr_step = tf.Variable(0, name='step', dtype=tf.float32)
-        update_step = lr_step.assign_add(1.0)
 
-        with tf.control_dependencies([update_step]):
-            update_g_lr = g_lr.assign(g_lr * args.g_annealing)
-            update_d_lr = d_lr.assign(d_lr * args.d_annealing)
+        # # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
+        # # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
+        # # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
+        # # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
+        # # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+        # # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
-        if args.horovod:
-            if args.use_adasum:
-                # optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum)
-                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
-                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum)
-            else:
-                optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
-                optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
+        # lr_step = tf.Variable(0, name='step', dtype=tf.float32)
+        # update_step = lr_step.assign_add(1.0)
+
+        # with tf.control_dependencies([update_step]):
+        #     update_g_lr = g_lr.assign(g_lr * args.g_annealing)
+        #     update_d_lr = d_lr.assign(d_lr * args.d_annealing)
+
+        # if args.horovod:
+        #     if args.use_adasum:
+        #         # optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum)
+        #         optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
+        #         optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum)
+        #     else:
+        #         optimizer_gen = hvd.DistributedOptimizer(optimizer_gen)
+        #         optimizer_disc = hvd.DistributedOptimizer(optimizer_disc)
+
 
         # ------------------------------------------------------------------------------------------#
         # NETWORKS
@@ -193,69 +203,87 @@ def main(args, config):
             gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
             disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
 
-            g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
-            d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
+            with tf.variable_scope('optimizer_gen'):
+                # disc_loss = tf.Print(gen_loss, [gen_loss], 'g_loss')
+                optimizer_gen = create_optimizer(gen_loss, gen_vars, 1e-8, (args.mixing_nimg + args.stabilizing_nimg) / (batch_size * global_size), 8, hvd=hvd, optimizer_type='adam')
 
-            g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
-            max_g_norm = tf.reduce_max(g_norms)
-            d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
-            max_d_norm = tf.reduce_max(d_norms)
+            with tf.variable_scope('optimizer_disc'):
+                # disc_loss = tf.Print(disc_loss, [disc_loss], 'd_loss')
+                optimizer_disc = create_optimizer(disc_loss, disc_vars, 1e-8, (args.mixing_nimg + args.stabilizing_nimg) / (batch_size * global_size), 8, hvd=hvd, optimizer_type='lamb')
 
-            # g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad, var in g_gradients]
-            # train_gen = optimizer_gen.apply_gradients(g_clipped_grads)
-            train_gen = optimizer_gen.apply_gradients(g_gradients)
-            train_disc = optimizer_disc.apply_gradients(d_gradients)
+            # if args.horovod:
+            #     if args.use_adasum:
+            #         # optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, op=hvd.Adasum)
+            #         optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, sparse_as_dense=True)
+            #         optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, op=hvd.Adasum, sparse_as_dense=True)
+            #     else:
+            #         optimizer_gen = hvd.DistributedOptimizer(optimizer_gen, sparse_as_dense=True)
+            #         optimizer_disc = hvd.DistributedOptimizer(optimizer_disc, sparse_as_dense=True)
 
-        elif args.optim_strategy == 'alternate':
+            # g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
+            # d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
 
-            disc_loss, gp_loss = forward_discriminator(
-                generator,
-                discriminator,
-                real_image_input,
-                args.latent_dim,
-                alpha,
-                phase,
-                num_phases,
-                base_dim,
-                base_shape,
-                args.activation,
-                args.leakiness,
-                args.network_size,
-                args.loss_fn,
-                args.gp_weight,
-                conditioning=real_label
-            )
+            # g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
+            # max_g_norm = tf.reduce_max(g_norms)
+            # d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
+            # max_d_norm = tf.reduce_max(d_norms)
 
-            disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-            d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
-            d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
-            max_d_norm = tf.reduce_max(d_norms)
+            # # g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad, var in g_gradients]
+            # # train_gen = optimizer_gen.apply_gradients(g_clipped_grads)
+            # gs = t
+            # train_gen = optimizer_gen.apply_gradients(g_gradients)
+            # train_disc = optimizer_disc.apply_gradients(d_gradients)
 
-            train_disc = optimizer_disc.apply_gradients(d_gradients)
+        # elif args.optim_strategy == 'alternate':
 
-            with tf.control_dependencies([train_disc]):
-                gen_sample, gen_loss = forward_generator(
-                    generator,
-                    discriminator,
-                    real_image_input,
-                    args.latent_dim,
-                    alpha,
-                    phase,
-                    num_phases,
-                    base_dim,
-                    base_shape,
-                    args.activation,
-                    args.leakiness,
-                    args.network_size,
-                    args.loss_fn,
-                    is_reuse=True
-                )
+        #     disc_loss, gp_loss = forward_discriminator(
+        #         generator,
+        #         discriminator,
+        #         real_image_input,
+        #         args.latent_dim,
+        #         alpha,
+        #         phase,
+        #         num_phases,
+        #         base_dim,
+        #         base_shape,
+        #         args.activation,
+        #         args.leakiness,
+        #         args.network_size,
+        #         args.loss_fn,
+        #         args.gp_weight,
+        #         conditioning=real_label
+        #     )
 
-                gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
-                g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
-                g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
-                max_g_norm = tf.reduce_max(g_norms)
-                train_gen = optimizer_gen.apply_gradients(g_gradients)
+        #     # disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
+        #     # d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
+        #     # d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
+        #     # max_d_norm = tf.reduce_max(d_norms)
+
+        #     # train_disc = optimizer_disc.apply_gradients(d_gradients)
+
+        #     with tf.control_dependencies([train_disc]):
+        #         gen_sample, gen_loss = forward_generator(
+        #             generator,
+        #             discriminator,
+        #             real_image_input,
+        #             args.latent_dim,
+        #             alpha,
+        #             phase,
+        #             num_phases,
+        #             base_dim,
+        #             base_shape,
+        #             args.activation,
+        #             args.leakiness,
+        #             args.network_size,
+        #             args.loss_fn,
+        #             is_reuse=True
+        #         )
+
+        #         gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+        #         g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
+        #         g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
+        #         max_g_norm = tf.reduce_max(g_norms)
+        #         train_gen = optimizer_gen.apply_gradients(g_gradients)
 
         else:
             raise ValueError("Unknown optim strategy ", args.optim_strategy)
@@ -279,16 +307,16 @@ def main(args, config):
             tf.summary.scalar('g_loss', gen_loss)
             tf.summary.scalar('gp', tf.reduce_mean(gp_loss))
 
-            for g in g_gradients:
-                tf.summary.histogram(f'grad_{g[1].name}', g[0])
+            # for g in g_gradients:
+            #     tf.summary.histogram(f'grad_{g[1].name}', g[0])
 
-            for g in d_gradients:
-                tf.summary.histogram(f'grad_{g[1].name}', g[0])
+            # for g in d_gradients:
+            #     tf.summary.histogram(f'grad_{g[1].name}', g[0])
 
             # tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
 
-            tf.summary.scalar('max_g_grad_norm', max_g_norm)
-            tf.summary.scalar('max_d_grad_norm', max_d_norm)
+            # tf.summary.scalar('max_g_grad_norm', max_g_norm)
+            # tf.summary.scalar('max_d_grad_norm', max_d_norm)
 
             real_image_grid = tf.transpose(real_image_input, (0, 2, 3, 1))  # D H W C  -> B H W C
             shape = real_image_grid.get_shape().as_list()
@@ -374,9 +402,14 @@ def main(args, config):
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
+                # _, _, summary, d_loss, g_loss = sess.run(
+                #      [train_gen, train_disc, merged_summaries,
+                #       disc_loss, gen_loss])
+
                 _, _, summary, d_loss, g_loss = sess.run(
-                     [train_gen, train_disc, merged_summaries,
+                     [optimizer_gen, optimizer_disc, merged_summaries,
                       disc_loss, gen_loss])
+
                 global_step += batch_size * global_size
                 local_step += 1
 
@@ -418,8 +451,8 @@ def main(args, config):
 
                 sess.run(update_alpha)
                 sess.run(ema_op)
-                sess.run(update_d_lr)
-                sess.run(update_g_lr)
+                # sess.run(update_d_lr)
+                # sess.run(update_g_lr)
 
                 assert alpha.eval() >= 0
 
@@ -442,9 +475,13 @@ def main(args, config):
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
+                # _, _, summary, d_loss, g_loss = sess.run(
+                #      [train_gen, train_disc, merged_summaries,
+                #       disc_loss, gen_loss])
+
                 _, _, summary, d_loss, g_loss = sess.run(
-                     [train_gen, train_disc, merged_summaries,
-                      disc_loss, gen_loss])
+                    [optimizer_gen, optimizer_disc, merged_summaries,
+                     disc_loss, gen_loss])
 
                 global_step += batch_size * global_size
                 local_step += 1
@@ -655,7 +692,7 @@ if __name__ == '__main__':
     parser.add_argument('--d_annealing', default=1,
                         type=float, help='discriminator annealing rate, 1 -> no annealing.')
     parser.add_argument('--num_metric_samples', type=int, default=512)
-    parser.add_argument('--beta1', type=float, default=0)
+    parser.add_argument('--beta1', type=float, default=0.0)
     parser.add_argument('--beta2', type=float, default=0.9)
     parser.add_argument('--ema_beta', type=float, default=0.99)
     parser.add_argument('--d_scaling', default='none', choices=['linear', 'sqrt', 'none'],
