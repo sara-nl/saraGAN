@@ -23,7 +23,10 @@ def main(args):
               f"final output resolution will be {2 * 2 ** num_phases}")
         
         verbose = True
-        writer = SummaryWriter()
+        try:
+            writer = SummaryWriter()
+        except FileExistsError:
+            print("Writer already exists, did you forget to specify --horovod?")
         
     else:
         writer = None
@@ -65,27 +68,27 @@ def main(args):
         # Get Dataset.
         size = 2 * 2 ** phase
         size_z = zdim_base * 2 ** (phase - 1)
-        data_path = os.path.join(args.dataset_path, f'{size_z}x{size}x{size}/')
-        scratch_path = os.path.join('/scratch/', f'{size_z}x{size}x{size}')
+        data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
+        scratch_path = os.path.join(args.scratch_path, f'{size}x{size}')
         if (args.horovod and hvd.local_rank() == 0) or not args.horovod:
             print("Copying files to scratch space.")
             copy_tree(data_path, scratch_path, preserve_symlinks=True, update=True)
             print('Done!')
             
-        while len(glob.glob(os.path.join(scratch_path, '*.pt'))) < len(glob.glob(os.path.join(data_path, '*.pt'))):
-            print(hvd.local_rank(), len(glob.glob(os.path.join(scratch_path, '*.pt'))), len(glob.glob(os.path.join(data_path, '*.pt'))))
+        while len(glob.glob(os.path.join(scratch_path, '*' + args.file_extension))) < len(glob.glob(os.path.join(data_path, '*' + args.file_extension))):
+            print(hvd.local_rank(), len(glob.glob(os.path.join(scratch_path, '*' + args.file_extension))), len(glob.glob(os.path.join(data_path, '*' + args.file_extension))))
             time.sleep(1)
         
-        assert len(glob.glob(os.path.join(scratch_path, '*.pt'))) == len(glob.glob(os.path.join(data_path, '*.pt')))
+        assert len(glob.glob(os.path.join(scratch_path, '*' + args.file_extension))) == len(glob.glob(os.path.join(data_path, '*' + args.file_extension)))
 
         dataset = DatasetFolder(scratch_path, 
-                               loader=lambda path: torch.load(path),
-                               extensions=('pt',),
-                               transform=lambda x: x.unsqueeze(0).float() / 1024
+                               loader=lambda path: torch.from_numpy(np.load(path).astype(np.float32)),
+                               extensions=(args.file_extension,),
+                               transform=lambda x: x.unsqueeze(0) / 1024
                                # transform=lambda x: x.float() 
         )
 
-        assert len(dataset) == len(glob.glob(os.path.join(scratch_path, '*.pt')))
+        assert len(dataset) == len(glob.glob(os.path.join(scratch_path, '*' + args.file_extension)))
         
         print('Dataset len, min, max, shape:', len(dataset), dataset[0].min(), dataset[0].max(), dataset[0].shape)
         
@@ -187,6 +190,8 @@ if __name__ == '__main__':
     parser.add_argument('dataset_path', type=str)
     parser.add_argument('final_resolution', type=int)
     parser.add_argument('final_zdim', type=int)
+    parser.add_argument('--scratch_path', type=str, default=None, required=True)
+    parser.add_argument('--file_extension', type=str, default='.npy')
     parser.add_argument('--starting_phase', type=int, default=2)
     parser.add_argument('--base_dim', type=int, default=256)
     parser.add_argument('--latent_dim', type=int, default=256)
