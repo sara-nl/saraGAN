@@ -44,15 +44,24 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
 def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param, conditioning=None):
     with tf.variable_scope(f'discriminator_out'):
         x = minibatch_stddev_layer(x)
-        with tf.variable_scope('conv') as scope:
+        with tf.variable_scope('conv1') as scope:
             shape = x.get_shape().as_list()[2:]
             kernel = [k(s) for s in shape]
             filters_in = x.shape[1]
-            x, runtime_coef = conv3d(x, filters_out, kernel, activation=activation, param=param)
+            x, runtime_coef = conv3d(x, filters_in, kernel, activation=activation, param=param)
             x = apply_bias(x, runtime_coef)
             x = act(x, activation, param=param)
             print(f'{scope.name}\n\tOutput Shape: {x.shape}\tParameters: {np.product(kernel) * filters_out * filters_in + filters_out}\tKernel: {kernel}')
-        with tf.variable_scope('output') as scope:
+
+        with tf.variable_scope('dense1') as scope:
+            filters_in = np.prod(x.shape[1:])
+            filters_out = filters_out
+            x, runtime_coef = dense(x, filters_out, activation=activation, param=param)
+            x = apply_bias(x, runtime_coef)
+            x = act(x, activation, param=param)
+            print(f'{scope.name}\n\tOutput Shape: {x.shape}\tParameters: {filters_out * filters_in + filters_out}')
+
+        with tf.variable_scope('dense2') as scope:
             filters_in = np.prod(x.shape[1:])
             filters_out = 1
             x, runtime_coef = dense(x, filters_out, activation='linear')
@@ -145,7 +154,7 @@ if __name__ == '__main__':
     num_phases = 8
     latent_dim = 512
     base_shape = [1, 1, 4, 4]
-    size = 'xxs'
+    size = 'm'
     base_dim = num_filters(-num_phases + 1, num_phases, base_dim=None, size=size)
     for phase in range(8, 9):
         tf.reset_default_graph()

@@ -43,8 +43,9 @@ def g_mapping(
 if __name__ == '__main__':
 
     phase = 8
-    latents_in = tf.random.normal(shape=[1, 1024])
-    labels = tf.random.normal(shape=[1, 10])
+    latents_in = tf.random.normal(shape=[1, 512])
+    labels = None
+    # labels = tf.random.normal(shape=[1, 10])
     dlatents = g_mapping(latents_in, phase, conditioning=labels)
 
     with tf.Session() as sess:

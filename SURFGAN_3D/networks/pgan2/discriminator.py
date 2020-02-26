@@ -86,7 +86,7 @@ if __name__ == '__main__':
     base_shape = [1, 1, 4, 4]
     latent_dim = 512
     base_dim = num_filters(-num_phases + 1, num_phases, base_dim=None, size='m')
-    for phase in range(3, 4):
+    for phase in range(8, 9):
         tf.reset_default_graph()
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         print(shape)
@@ -104,12 +104,12 @@ if __name__ == '__main__':
         print('Total discriminator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('discriminator')))
 
-        with tf.Session() as sess:
-            sess.run(tf.global_variables_initializer())
-            start = time.time()
-            sess.run(train)
+        # with tf.Session() as sess:
+        #     sess.run(tf.global_variables_initializer())
+        #     start = time.time()
+        #     sess.run(train)
 
-            end = time.time()
+            # end = time.time()
 
-            print(f"{end - start} seconds")
+            # print(f"{end - start} seconds")
 
