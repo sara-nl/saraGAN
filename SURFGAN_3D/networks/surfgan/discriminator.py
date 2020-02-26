@@ -48,7 +48,7 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param, c
         return x
 
 
-def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation, conditioning=None, param=None, is_reuse=False, size='medium', ):
+def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation, conditioning=None, param=None, is_reuse=False, size='m', ):
 
     with tf.variable_scope('discriminator') as scope:
 
@@ -82,9 +82,10 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
 
 if __name__ == '__main__':
     num_phases = 8
-    base_dim = 512
-    base_shape = [1, 1, 4, 4]
     latent_dim = 512
+    base_shape = [1, 1, 4, 4]
+    size = 'm'
+    base_dim = num_filters(-num_phases + 1, num_phases, base_dim=None, size=size)
     for phase in range(8, 9):
         tf.reset_default_graph()
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))

@@ -48,7 +48,7 @@ def main(args, config):
     image_channels = final_shape[0]
     final_resolution = final_shape[-1]
     num_phases = int(np.log2(final_resolution) - 1)
-    base_dim = num_filters(1, num_phases, size=args.network_size)
+    base_dim = num_filters(-num_phases + 1, num_phases, size=args.network_size)
 
     var_list = list()
     global_step = 0

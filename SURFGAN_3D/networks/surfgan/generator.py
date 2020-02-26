@@ -3,6 +3,7 @@ from networks.surfgan.g_mapping import g_mapping
 from networks.surfgan.g_synthesis import g_synthesis
 import numpy as np
 import time
+from networks.ops import num_filters
 
 
 def generator(z,
@@ -16,7 +17,7 @@ def generator(z,
               is_training=True,
               param=None,
               truncation_psi=None, truncation_layers=8, beta=0.995, style_mixing_prob=0.9,
-              size='medium',
+              size='m',
               is_reuse=False):
 
     with tf.variable_scope('generator') as scope:
@@ -64,10 +65,11 @@ def generator(z,
 if __name__ == '__main__':
 
     num_phases = 8
-    base_dim = 1024
-    latent_dim = 1024
+    latent_dim = 512
     base_shape = [1, 1, 4, 4]
-    for phase in range(1, 2):
+    size = 'm'
+    base_dim = num_filters(-num_phases + 1, num_phases, base_dim=None, size=size)
+    for phase in range(8, 9):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
         y = generator(x, 0.5, phase, num_phases, base_dim, base_shape, activation='leaky_relu',

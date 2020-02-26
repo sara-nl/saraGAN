@@ -7,12 +7,12 @@ def g_mapping(
         phase,
         conditioning=None,
         mapping_layers=8,
-        mapping_fmaps=512,
         mapping_lrmul=.01,
         activation='leaky_relu',
         act_param=0.2,
         is_reuse=False):
 
+    mapping_fmaps = z.shape[1]
     with tf.variable_scope('g_mapping') as scope:
         if is_reuse:
             scope.reuse_variables()

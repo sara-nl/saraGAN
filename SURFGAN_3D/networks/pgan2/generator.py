@@ -14,7 +14,7 @@ def generator_in(x, filters, shape, activation, param=None):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
 
-        x = conv2d(x, filters, kernel, activation, param=param)
+        x = conv3d(x, filters, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
@@ -23,12 +23,12 @@ def generator_in(x, filters, shape, activation, param=None):
 
 def generator_block(x, filters_out, activation, param=None):
     with tf.variable_scope('upsample'):
-        x = upscale2d(x)
+        x = upscale3d(x)
 
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv2d(x, filters_out, kernel, activation, param=param)
+        x = conv3d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
@@ -43,7 +43,10 @@ def generator_block(x, filters_out, activation, param=None):
     return x
 
 
-def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None, size='medium', is_reuse=False):
+def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None, size='m', is_reuse=False, conditioning=None):
+
+    if conditioning is not None:
+        raise NotImplementedError()
 
     channels = base_shape[0]
 
@@ -66,20 +69,20 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
 
             if i == phase:
                 with tf.variable_scope(f'to_rgb_{i}'):
-                    x_out = (1 - alpha) * to_rgb(x) + upscale2d(x_out)
+                    x_out = (1 - alpha) * to_rgb(x) + upscale3d(x_out)
             else:
                 with tf.variable_scope(f'to_rgb_{i}'):
-                    x_out = to_rgb(x) + upscale2d(x_out)
+                    x_out = to_rgb(x) + upscale3d(x_out)
 
         return x_out
 
 
 if __name__ == '__main__':
     num_phases = 8
-    base_dim = 512
     latent_dim = 512
     base_shape = [1, 1, 4, 4]
-    for phase in range(8, 9):
+    base_dim = num_filters(-num_phases + 1, num_phases, base_dim=None, size='m')
+    for phase in range(3, 4):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
         y = generator(x, 0.5, phase, num_phases, base_dim, base_shape, activation='leaky_relu',
@@ -96,11 +99,11 @@ if __name__ == '__main__':
         print('Total generator variables:',
               sum(np.product(p.shape) for p in tf.trainable_variables('generator')))
 
-        # with tf.Session() as sess:
-        #     sess.run(tf.global_variables_initializer())
-        #     start = time.time()
-        #     sess.run(train)
+        with tf.Session() as sess:
+            sess.run(tf.global_variables_initializer())
+            start = time.time()
+            sess.run(train)
 
-        #     end = time.time()
+            end = time.time()
 
-        #     print(f"{end - start} seconds")
+            print(f"{end - start} seconds")
