@@ -150,22 +150,23 @@ def act(x, activation, param=None):
 
 def num_filters(phase, num_phases, base_dim=None, size=None):
     if size == 'xxs':
-        filter_list = [64, 64, 64, 64, 64, 64, 64, 64, 32, 16, 8, 4, 2]
+        filter_list = [256, 256, 64, 32, 16, 8, 4, 2]
     elif size == 'xs':
-        filter_list = [128, 128, 128, 128, 128, 128, 128, 128, 64, 32, 16, 8, 4]
+        filter_list = [256, 256, 64, 64, 32, 16, 8, 4]
     elif size == 's':
-        filter_list = [256, 256, 256, 256, 256, 256, 256, 256, 128, 64, 32, 16, 8]
+        filter_list = [512, 512, 128, 128, 64, 32, 16, 8]
     elif size == 'm':
-        filter_list = [512, 512, 512, 512, 512, 512, 512, 512, 256, 128, 64, 32, 16]
+        filter_list = [1024, 1024, 256, 256, 128, 64, 32, 16]
     elif size == 'l':
-        filter_list = [512, 512, 512, 512, 512, 512, 512, 512, 512, 256, 128, 64, 32]
+        filter_list = [2048, 2048, 512, 512, 256, 128, 64, 32]
     elif size == 'xl':
-        filter_list = [1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 512, 256, 128, 64]
+        filter_list = [4096, 4096, 1024, 1024, 512, 256, 128, 64]
     elif size == 'xxl':
-        filter_list = [2048, 2048, 2048, 2048, 2048, 2048, 2048, 2048, 2048, 1024, 512, 256, 128]
+        filter_list = [8192, 8192, 2048, 1024, 1024, 512, 256, 128]
     else:
         raise ValueError(f"Unknown size: {size}")
-    filter_list = filter_list[-num_phases:]
+    # filter_list = filter_list[-num_phases:]
+    assert len(filter_list) == 8, "Filter lists are built for LIDC-IDRI dataset."
     filters = filter_list[phase - 1]
     return filters
 

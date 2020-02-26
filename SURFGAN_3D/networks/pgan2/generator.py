@@ -22,6 +22,11 @@ def generator_in(x, filters, shape, activation, param=None):
 
 
 def generator_block(x, filters_out, activation, param=None):
+
+    with tf.variable_scope('residual'):
+        t = conv3d(x, filters_out, (1, 1, 1), activation=activation, param=param)
+        t = upscale3d(t)
+
     with tf.variable_scope('upsample'):
         x = upscale3d(x)
 
@@ -40,6 +45,9 @@ def generator_block(x, filters_out, activation, param=None):
         x = apply_bias(x)
         x = act(x, activation, param=param)
         x = pixel_norm(x)
+
+    x = (x + t) * (1 / calculate_gain(activation, param))
+
     return x
 
 
