@@ -65,7 +65,7 @@ def generator(z,
 if __name__ == '__main__':
 
     num_phases = 8
-    latent_dim = 1024
+    latent_dim = 512
     base_shape = [1, 1, 4, 4]
     size = 'm'
     base_dim = num_filters(-num_phases + 1, num_phases, base_dim=None, size=size)

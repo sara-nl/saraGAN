@@ -1,8 +1,6 @@
 from networks.ops import *
-from networks.surfgan.ops import *  # No good coding style, but ensures to use these ops.
+from networks.surfgan.ops import *
 import time
-from collections import defaultdict
-from utils import count_parameters
 
 
 def discriminator_block(x, filters_in, filters_out, activation, param=None):
@@ -48,14 +46,14 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param, c
             shape = x.get_shape().as_list()[2:]
             kernel = [k(s) for s in shape]
             filters_in = x.shape[1]
-            x, runtime_coef = conv3d(x, filters_in, kernel, activation=activation, param=param)
+            x, runtime_coef = conv3d(x, filters_out, kernel, activation=activation, param=param)
             x = apply_bias(x, runtime_coef)
             x = act(x, activation, param=param)
             print(f'{scope.name}\n\tOutput Shape: {x.shape}\tParameters: {np.product(kernel) * filters_out * filters_in + filters_out}\tKernel: {kernel}')
 
         with tf.variable_scope('dense1') as scope:
             filters_in = np.prod(x.shape[1:])
-            filters_out = filters_out
+            filters_out = latent_dim
             x, runtime_coef = dense(x, filters_out, activation=activation, param=param)
             x = apply_bias(x, runtime_coef)
             x = act(x, activation, param=param)
