@@ -131,7 +131,6 @@ def train_epoch(data_loader, generator, discriminator, generator_optim, discrimi
     gradient_penalties = []
 
     for i, x_real in enumerate(data_loader):
-
         # Train discriminator.
         generator.eval()
         discriminator.train()
