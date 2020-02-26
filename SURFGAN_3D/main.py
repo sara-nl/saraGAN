@@ -197,22 +197,36 @@ def main(args, config):
                 args.loss_fn,
                 args.gp_weight
             )
-
             gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
             disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
 
-            g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
-            d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
+            g_gradients, g_variables = zip(*optimizer_gen.compute_gradients(gen_loss,
+                                                                            var_list=gen_vars))
+            g_gradients, _ = tf.clip_by_global_norm(g_gradients, 1.0)
 
-            g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
+
+            d_gradients, d_variables = zip(*optimizer_disc.compute_gradients(disc_loss,
+                                                                             var_list=disc_vars))
+            d_gradients, _ = tf.clip_by_global_norm(d_gradients, 1.0)
+
+
+            g_norms = tf.stack([tf.norm(grad) for grad in g_gradients if grad is not None])
             max_g_norm = tf.reduce_max(g_norms)
-            d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
+            d_norms = tf.stack([tf.norm(grad) for grad in d_gradients if grad is not None])
             max_d_norm = tf.reduce_max(d_norms)
+
+            # g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
+            # max_g_norm = tf.reduce_max(g_norms)
+            # d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
+            # max_d_norm = tf.reduce_max(d_norms)
 
             # g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad, var in g_gradients]
             # train_gen = optimizer_gen.apply_gradients(g_clipped_grads)
-            train_gen = optimizer_gen.apply_gradients(g_gradients)
-            train_disc = optimizer_disc.apply_gradients(d_gradients)
+            train_gen = optimizer_gen.apply_gradients(zip(g_gradients, g_variables))
+            train_disc = optimizer_disc.apply_gradients(zip(d_gradients, d_variables))
+
+            # train_gen = optimizer_gen.apply_gradients(g_gradients)
+            # train_disc = optimizer_disc.apply_gradients(d_gradients)
 
         elif args.optim_strategy == 'alternate':
 
@@ -287,10 +301,10 @@ def main(args, config):
             tf.summary.scalar('g_loss', gen_loss)
             tf.summary.scalar('gp', tf.reduce_mean(gp_loss))
 
-            for g in g_gradients:
+            for g in zip(g_gradients, g_variables):
                 tf.summary.histogram(f'grad_{g[1].name}', g[0])
 
-            for g in d_gradients:
+            for g in zip(d_gradients, d_variables):
                 tf.summary.histogram(f'grad_{g[1].name}', g[0])
 
             # tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
