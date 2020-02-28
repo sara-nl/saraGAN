@@ -17,7 +17,7 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
         x, runtime_coef = conv3d(x, filters_in, kernel, activation, param=param)
         x = apply_bias(x, runtime_coef)
         x = act(x, activation, param=param)
-        parameters = np.product(kernel) * filters_out * filters_in
+        parameters = np.product(kernel) * filters_in * filters_in + filters_in
         total_parameters += parameters
 
     with tf.variable_scope('conv_2'):
@@ -28,12 +28,11 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
         x = apply_bias(x, runtime_coef)
         x = act(x, activation, param=param)
 
-        parameters = np.product(kernel) * filters_out * filters_in
+        parameters = np.product(kernel) * filters_out * filters_in + filters_out
         total_parameters += parameters
 
-    print(f'\tOutput Shape: {x.shape}\tParameters: {total_parameters}\t Kernel: {kernel}')
-
     x = downscale3d(x)
+    print(f'\tOutput Shape: {x.shape}\tParameters: {total_parameters}\t Kernel: {kernel}')
     x = (x + t) * (1 / calculate_gain(activation, param))
 
     return x
@@ -93,8 +92,6 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
                 filters_in = num_filters(i, num_phases, base_dim, size=size)
                 filters_out = num_filters(i - 1, num_phases, base_dim, size=size)
                 x = discriminator_block(x, filters_in, filters_out, activation, param=param)
-
-
             if i == phase:
                 with tf.variable_scope(f'from_rgb_{phase - 1}'):
                     fromrgb_prev = from_rgb(
@@ -102,6 +99,7 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
                         filters_out, activation, param=param)
 
                 x = alpha * fromrgb_prev + (1 - alpha) * x
+
 
         x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, param, conditioning)
 
@@ -167,9 +165,9 @@ if __name__ == '__main__':
         # print_network('discriminator')
 #         print('Discriminator output shape:', y.shape)
 #
-        # for p in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='discriminator'):
-        #     print(np.product(p.shape), p.name)  # i.name if you want just a name
-#
+        for p in tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='discriminator'):
+            print(np.product(p.shape), p.name)  # i.name if you want just a name
+
         print('Total discriminator parameters:',
               sum(np.product(p.shape) for p in tf.trainable_variables('discriminator')))
 

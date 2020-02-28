@@ -66,7 +66,8 @@ def g_synthesis(d_z,
         with tf.variable_scope('generator_in'):
             x = generator_in(d_z, base_dim, base_shape, activation, param)
 
-        x_out = to_rgb(x, d_z[:, 1])
+        with tf.variable_scope(f'to_rgb_{1}'):
+            x_out = to_rgb(x, d_z[:, 1])
 
         for layer_idx in range(2, phase + 1):
 
@@ -94,7 +95,7 @@ if __name__ == '__main__':
 
     for phase in range(8, 9):
         tf.reset_default_graph()
-        latents_shape = (1, phase * 3 - 2, latent_size)
+        latents_shape = (1, phase * 4 - 2, latent_size)
         dlatents = tf.random.normal(shape=latents_shape)
         alpha = tf.Variable(0.5)
         img_out = g_synthesis(dlatents, alpha, phase, num_phases,
