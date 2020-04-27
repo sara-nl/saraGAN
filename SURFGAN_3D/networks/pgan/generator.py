@@ -43,7 +43,10 @@ def generator_block(x, filters_out, activation, param=None):
     return x
 
 
-def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None, size='medium', is_reuse=False):
+def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, param=None, size='medium', is_reuse=False, conditioning=None):
+
+    if conditioning is not None:
+        raise NotImplementedError()
 
     with tf.variable_scope('generator') as scope:
 

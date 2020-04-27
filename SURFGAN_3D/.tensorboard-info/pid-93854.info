@@ -1,0 +1,10 @@
+{
+    "cache_key": "eyJhcmd1bWVudHMiOlsiLS1sb2dkaXIiLCJydW5zLyIsIi0taG9zdCIsImxvY2FsaG9zdCIsIi0tcG9ydCIsIjYwMDciXSwiY29uZmlndXJlX2t3YXJncyI6e30sIndvcmtpbmdfZGlyZWN0b3J5IjoiL2hvbWUvZGF2aWRyL3Byb2plY3RzL3NhcmFHQU4vU1VSRkdBTl8zRCJ9",
+    "db": "",
+    "logdir": "runs/",
+    "path_prefix": "",
+    "pid": 93854,
+    "port": 6007,
+    "start_time": 1581584164,
+    "version": "1.15.0"
+}

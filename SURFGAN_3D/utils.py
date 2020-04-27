@@ -2,6 +2,8 @@ import tensorflow as tf
 import numpy as np
 from tensorflow.python.ops import array_ops
 import ast
+from multiprocessing import Pool
+import os
 
 
 def parse_tuple(string):
@@ -100,3 +102,15 @@ def uniform_box_sampler(arr, min_width, max_width):
         stop = start + int(np.random.uniform(mn, mx + 1))
         slices.append(slice(start, stop))
     return slices, arr[slices]
+
+
+class MPMap:
+    def __init__(self, f):
+        self.pool = Pool(int(os.environ['OMP_NUM_THREADS']))
+        self.f = f
+
+    def map(self, l: list):
+        return self.pool.map_async(self.f, l)
+
+    def close(self):
+        self.pool.close()

@@ -4,7 +4,9 @@ import os
 import shutil
 import time
 import tensorflow as tf
-
+import multiprocessing
+import itertools
+import psutil
 
 class NumpyDataset:
     def __init__(self, npy_dir, scratch_dir, copy_files, is_correct_phase):
@@ -72,46 +74,18 @@ class NumpyPathDataset:
         self.scratch_files = glob.glob(self.scratch_dir + '/*.npy')
         assert len(self.scratch_files) == len(self.npy_files)
 
-        test_npy_array = np.load(self.npy_files[0])[np.newaxis, ...]
+        test_npy_array = np.load(self.scratch_files[0])[np.newaxis, ...]
         self.shape = test_npy_array.shape
         self.dtype = test_npy_array.dtype
         del test_npy_array
 
     def __iter__(self):
-        for path in self.npy_files:
+        for path in self.scratch_files:
             yield path
 
     def __getitem__(self, idx):
-        return self.npy_files[idx]
+        return self.scratch_files[idx]
 
     def __len__(self):
-        return len(self.npy_files)
-
-
-if __name__ == '__main__':
-
-    npy_data = NumpyPathDataset('/lustre4/2/managed_datasets/LIDC-IDRI/npy/average/4x4/', '/scratch-local', copy_files=True,
-                                is_correct_phase=True)
-
-    dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
-
-    def load(x):
-        x = np.load(x.numpy().decode('utf-8'))[np.newaxis, ...]
-        return x
-
-
-    # Lay out the graph.
-    dataset = dataset.shuffle(len(npy_data))
-    dataset = dataset.map(lambda x: tf.py_function(func=load, inp=[x], Tout=tf.uint16), num_parallel_calls=AUTOTUNE)
-    # dataset = dataset.map(lambda x: tf.cast(x, tf.float32) / 1024 - 1, num_parallel_calls=AUTOTUNE)
-    # dataset = dataset.batch(256, drop_remainder=True)
-    # dataset = dataset.prefetch(AUTOTUNE)
-    # dataset = dataset.repeat()
-    dataset = dataset.make_one_shot_iterator()
-
-    real_image_input = dataset.get_next()
-
-    with tf.Session() as sess:
-        sess.run(real_image_input)
-
+        return len(self.scratch_files)
 

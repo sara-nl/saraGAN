@@ -8,7 +8,7 @@ import random
 from metrics import (calculate_fid_given_batch_volumes, get_swd_for_volumes,
                      get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
 from dataset import NumpyPathDataset
-from utils import count_parameters, image_grid, parse_tuple
+from utils import count_parameters, image_grid, parse_tuple, MPMap
 # from mpi4py import MPI
 import os
 import importlib
@@ -17,6 +17,7 @@ from networks.loss import forward_simultaneous, forward_generator, forward_discr
 import psutil
 from networks.ops import num_filters
 from tensorflow.data.experimental import AUTOTUNE
+import nvgpu
 
 
 def main(args, config):
@@ -24,17 +25,17 @@ def main(args, config):
     if args.horovod:
         verbose = hvd.rank() == 0
         global_size = hvd.size()
-        # global_rank = hvd.rank()
+        global_rank = hvd.rank()
         local_rank = hvd.local_rank()
     else:
         verbose = True
         global_size = 1
-        # global_rank = 0
+        global_rank = 0
         local_rank = 0
 
     timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
     logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
-
+    os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
     if verbose:
         writer = tf.summary.FileWriter(logdir=logdir)
         print("Arguments passed:")
@@ -42,7 +43,8 @@ def main(args, config):
         print(f"Saving files to {logdir}")
 
     else:
-        writer = None
+        pass
+        # writer = None
 
     final_shape = parse_tuple(args.final_shape)
     image_channels = final_shape[0]
@@ -66,8 +68,8 @@ def main(args, config):
         npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=local_rank == 0,
                                     is_correct_phase=phase >= args.starting_phase)
 
-        # dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
-        dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
+        # # dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
+        # dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
 
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
@@ -77,38 +79,45 @@ def main(args, config):
             if verbose:
                 print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")
 
-        if args.horovod:
-            dataset.shard(hvd.size(), hvd.rank())
-
-        def load(x):
-            x = np.load(x.decode())[np.newaxis, ...].astype(np.float32) / 1024 - 1
-            return x
-
-        if args.gpu:
-            parallel_calls = AUTOTUNE
-        else:
-            parallel_calls = int(os.environ['OMP_NUM_THREADS'])
-
-        dataset = dataset.shuffle(len(npy_data))
-        dataset = dataset.map(lambda x: tuple(tf.py_func(load, [x], [tf.float32])), num_parallel_calls=parallel_calls)
-        dataset = dataset.batch(batch_size, drop_remainder=True)
-        dataset = dataset.repeat()
-        dataset = dataset.prefetch(AUTOTUNE)
-        dataset = dataset.make_one_shot_iterator()
-        data = dataset.get_next()
-        if len(data) == 1:
-            real_image_input = data
-            real_label = None
-        elif len(data) == 2:
-            real_image_input, real_label = data
-        else:
-            raise NotImplementedError()
+        # if args.horovod:
+        #     dataset.shard(hvd.size(), hvd.rank())
+        #
+        # def load(x):
+        #     x = np.load(x.decode())[np.newaxis, ...].astype(np.float32) / 1024 - 1
+        #     return x
+        #
+        # if args.gpu:
+        #     parallel_calls = AUTOTUNE
+        # else:
+        #     parallel_calls = int(os.environ['OMP_NUM_THREADS'])
+        #
+        # dataset = dataset.shuffle(len(npy_data))
+        # dataset = dataset.map(lambda x: tuple(tf.py_func(load, [x], [tf.float32])), num_parallel_calls=parallel_calls)
+        # dataset = dataset.batch(batch_size, drop_remainder=True)
+        # dataset = dataset.repeat()
+        # dataset = dataset.prefetch(AUTOTUNE)
+        # dataset = dataset.make_one_shot_iterator()
+        # data = dataset.get_next()
+        # if len(data) == 1:
+        #     real_image_input = data
+        #     real_label = None
+        # elif len(data) == 2:
+        #     real_image_input, real_label = data
+        # else:
+        #     raise NotImplementedError()
 
         zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
         base_shape = (image_channels, zdim_base, 4, 4)
-        real_image_input = tf.squeeze(real_image_input, axis=0)
-        real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, *[size * 2 ** (phase - 1) for size in base_shape[1:]]])
+        current_shape = [batch_size, image_channels, *[size * 2 ** (phase - 1) for size in
+                                                       base_shape[1:]]]
+        real_image_input = tf.placeholder(shape=current_shape, dtype=tf.float32)
+
+        # real_image_input = tf.random.normal([1, batch_size, image_channels, *[size * 2 ** (phase -
+        #                                                                                  1) for size in base_shape[1:]]])
+        # real_image_input = tf.squeeze(real_image_input, axis=0)
+        # real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, *[size * 2 ** (phase - 1) for size in base_shape[1:]]])
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
+        real_label = None
 
         if real_label is not None:
             real_label = tf.one_hot(real_label, depth=args.num_labels)
@@ -143,8 +152,8 @@ def main(args, config):
 
         optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
         optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
-        # optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=1e-3)
-        # optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=1e-3)
+        #optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=g_lr)
+        #optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=d_lr)
         # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
         # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
         # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
@@ -202,12 +211,14 @@ def main(args, config):
 
             g_gradients, g_variables = zip(*optimizer_gen.compute_gradients(gen_loss,
                                                                             var_list=gen_vars))
-            g_gradients, _ = tf.clip_by_global_norm(g_gradients, 1.0)
+            if args.g_clipping:
+                g_gradients, _ = tf.clip_by_global_norm(g_gradients, 1.0)
 
 
             d_gradients, d_variables = zip(*optimizer_disc.compute_gradients(disc_loss,
                                                                              var_list=disc_vars))
-            d_gradients, _ = tf.clip_by_global_norm(d_gradients, 1.0)
+            if args.d_clipping:
+                d_gradients, _ = tf.clip_by_global_norm(d_gradients, 1.0)
 
 
             g_norms = tf.stack([tf.norm(grad) for grad in g_gradients if grad is not None])
@@ -348,6 +359,9 @@ def main(args, config):
         broadcast = hvd.broadcast_global_variables(0)
 
         with tf.Session(config=config) as sess:
+            # if args.gpu:
+            #     assert tf.test.is_gpu_available(cuda_only=False, min_cuda_compute_capability=None)
+            # sess.graph.finalize()
             sess.run(init_op)
 
             trainable_variable_names = [v.name for v in tf.trainable_variables()]
@@ -389,16 +403,21 @@ def main(args, config):
 
             while True:
                 start = time.time()
-                if local_step % 128 == 0 and local_step > 1:
+                if local_step % 2048 == 0 and local_step > 1:
                     if args.horovod:
                         sess.run(broadcast)
                     saver = tf.train.Saver(var_list)
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
+                batch_loc = np.random.randint(0, len(npy_data) - batch_size)
+                batch_paths = npy_data[batch_loc: batch_loc + batch_size]
+                batch = np.stack([np.load(path) for path in batch_paths])
+                batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
+
                 _, _, summary, d_loss, g_loss = sess.run(
                      [train_gen, train_disc, merged_summaries,
-                      disc_loss, gen_loss])
+                      disc_loss, gen_loss], feed_dict={real_image_input: batch})
                 global_step += batch_size * global_size
                 local_step += 1
 
@@ -406,32 +425,39 @@ def main(args, config):
                 img_s = global_size * batch_size / (end - start)
                 if verbose:
 
-                    writer.add_summary(summary, global_step)
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
-                                       global_step)
-                    memory_percentage = psutil.Process(os.getpid()).memory_percent()
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
-                                       global_step)
+                    if local_step % 32 == 0:
+                        writer.add_summary(summary, global_step)
+                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
+                                           global_step)
+                    # memory_percentage = psutil.Process(os.getpid()).memory_percent()
+                    # if not args.gpu:
+                    #     memory_percentage = psutil.Process(os.getpid()).memory_percent()
+                    # else:
+                    #     memory_percentage = nvgpu.gpu_info()[local_rank]['mem_used_percent']
+
+
+                    # writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
+                    #                    global_step)
 
                     print(f"Step {global_step:09} \t"
                           f"img/s {img_s:.2f} \t "
                           f"d_loss {d_loss:.4f} \t "
                           f"g_loss {g_loss:.4f} \t "
-                          f"memory {memory_percentage:.4f} % \t"
+                          # f"memory {memory_percentage:.4f} % \t"
                           f"alpha {alpha.eval():.2f}")
 
-                    # if take_first_snapshot:
-                    #     import tracemalloc
-                    #     tracemalloc.start()
-                    #     snapshot_first = tracemalloc.take_snapshot()
-                    #     take_first_snapshot = False
+                #     # if take_first_snapshot:
+                #     #     import tracemalloc
+                #     #     tracemalloc.start()
+                #     #     snapshot_first = tracemalloc.take_snapshot()
+                #     #     take_first_snapshot = False
 
-                    # snapshot = tracemalloc.take_snapshot()
-                    # top_stats = snapshot.compare_to(snapshot_first, 'lineno')
-                    # print("[ Top 10 differences ]")
-                    # for stat in top_stats[:10]:
-                    #     print(stat)
-                    # snapshot_prev = snapshot
+                #     # snapshot = tracemalloc.take_snapshot()
+                #     # top_stats = snapshot.compare_to(snapshot_first, 'lineno')
+                #     # print("[ Top 10 differences ]")
+                #     # for stat in top_stats[:10]:
+                #     #     print(stat)
+                #     # snapshot_prev = snapshot
 
                 if global_step >= ((phase - args.starting_phase)
                                    * (args.mixing_nimg + args.stabilizing_nimg)
@@ -445,8 +471,8 @@ def main(args, config):
 
                 assert alpha.eval() >= 0
 
-                if verbose:
-                    writer.flush()
+                # if verbose:
+                #     writer.flush()
 
             if verbose:
                 print(f"Begin stabilizing epochs in phase {phase}")
@@ -456,7 +482,7 @@ def main(args, config):
             while True:
                 start = time.time()
                 assert alpha.eval() == 0
-                if local_step % 128 == 0 and local_step > 0:
+                if local_step % 2048 == 0 and local_step > 0:
 
                     if args.horovod:
                         sess.run(broadcast)
@@ -464,9 +490,14 @@ def main(args, config):
                     if verbose:
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
+                batch_loc = np.random.randint(0, len(npy_data) - batch_size)
+                batch_paths = npy_data[batch_loc: batch_loc + batch_size]
+                batch = np.stack([np.load(path) for path in batch_paths])
+                batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
+
                 _, _, summary, d_loss, g_loss = sess.run(
-                     [train_gen, train_disc, merged_summaries,
-                      disc_loss, gen_loss])
+                    [train_gen, train_disc, merged_summaries,
+                     disc_loss, gen_loss], feed_dict={real_image_input: batch})
 
                 global_step += batch_size * global_size
                 local_step += 1
@@ -474,24 +505,33 @@ def main(args, config):
                 end = time.time()
                 img_s = global_size * batch_size / (end - start)
                 if verbose:
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
-                                       global_step)
+
+                    if local_step % 32 == 0:
+                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s',
+                                                                            simple_value   =img_s)]),
+                                        global_step)
                     writer.add_summary(summary, global_step)
-                    memory_percentage = psutil.Process(os.getpid()).memory_percent()
-                    writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
-                                       global_step)
+                    # memory_percentage = psutil.Process(os.getpid()).memory_percent()
+                    # if not args.gpu:
+                    #     memory_percentage = psutil.Process(os.getpid()).memory_percent()
+                    # else:
+                    #     gpu_info = nvgpu.gpu_info()
+                    #     memory_percentage = nvgpu.gpu_info()[local_rank]['mem_used_percent']
+
+                    # writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
+                    #                    global_step)
 
                     print(f"Step {global_step:09} \t"
                           f"img/s {img_s:.2f} \t "
                           f"d_loss {d_loss:.4f} \t "
                           f"g_loss {g_loss:.4f} \t "
-                          f"memory {memory_percentage:.4f} % \t"
+                          # f"memory {memory_percentage:.4f} % \t"
                           f"alpha {alpha.eval():.2f}")
 
                 sess.run(ema_op)
 
-                if verbose:
-                    writer.flush()
+                # if verbose:
+                #     writer.flush()
 
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
                     # if verbose:
@@ -660,8 +700,8 @@ if __name__ == '__main__':
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
     parser.add_argument('--base_batch_size', type=int, default=256, help='batch size used in phase 1')
     parser.add_argument('--max_global_batch_size', type=int, default=256)
-    parser.add_argument('--mixing_nimg', type=int, default=2 ** 18)
-    parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 18)
+    parser.add_argument('--mixing_nimg', type=int, default=2 ** 21)
+    parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 21)
     parser.add_argument('--g_lr', type=float, default=1e-3)
     parser.add_argument('--d_lr', type=float, default=1e-3)
     parser.add_argument('--loss_fn', default='logistic', choices=['logistic', 'wgan'])
@@ -690,7 +730,14 @@ if __name__ == '__main__':
     parser.add_argument('--optim_strategy', default='simultaneous', choices=['simultaneous', 'alternate'])
     parser.add_argument('--num_inter_ops', default=4, type=int)
     parser.add_argument('--num_labels', default=None, type=int)
+    parser.add_argument('--g_clipping', default=False, type=bool)
+    parser.add_argument('--d_clipping', default=False, type=bool)
+    # parser.add_argument('--load_phase', default=None, type=int)
     args = parser.parse_args()
+
+    # if args.coninue_path:
+    #     assert args.load_phase is not None, "Please specify in which phase the weights of the " \
+    #                                         "specified continue_path should be loaded."
 
     if args.horovod:
         hvd.init()
@@ -708,12 +755,20 @@ if __name__ == '__main__':
     if args.architecture in ('stylegan2'):
         assert args.starting_phase == args.ending_phase
 
+    if 'OMP_NUM_THREADS' not in os.environ:
+        print("Warning: OMP_NUM_THREADS not set. Setting it to 1.")
+        os.environ['OMP_NUM_THREADS'] = str(1)
+
     gopts = tf.GraphOptions(place_pruned_graph=True)
     config = tf.ConfigProto(graph_options=gopts, allow_soft_placement=True)
+    # config = tf.ConfigProto()
 
     if args.gpu:
         config.gpu_options.allow_growth = True
-        config.gpu_options.visible_device_list = str(hvd.local_rank())
+        # config.inter_op_parallelism_threads = 1
+        #config.gpu_options.per_process_gpu_memory_fraction = 0.96
+        if args.horovod:
+            config.gpu_options.visible_device_list = str(hvd.local_rank())
 
     else:
         config = tf.ConfigProto(graph_options=gopts,
