@@ -11,5 +11,4 @@ Uploaded models:
 
 64x64x16 pgan 'xs' model: https://drive.google.com/open?id=1tBQ1W9Hj_B-IR1U7zSv4ZWfRSOiwL42n
 
-128x128x32 pgan 'm' model: https://drive.google.com/open?id=1WZ0kiLtDRV8Ac8LdjTD8F7tXXaR8tNq-
-
+128x128x32 pgan 'm' model: https://drive.google.com/open?id=14llM6tAxw5wb9NNP0KjkTZiWx_x2fRJl
