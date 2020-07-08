@@ -12,7 +12,7 @@ To run saraGAN 3D you'll need
 
 ### How to run
 - Load any modules or virtual environments that contain the above dependencies.
-- Set OMP_NUM_THREADS to a reasonable value. Usually, number-of-cores-per-task - 1 is a reasonable setting (e.g. if you run 2 tasks on a 2-socket CPU node with 2*12 cores, you would set OMP_NUM_THREADS=2 and run 2 tasks on such a node, mapping them by socket)
+- Set OMP_NUM_THREADS to a reasonable value. Usually, number-of-cores-per-task - 1 is a reasonable setting (e.g. if you run 2 tasks on a 2-socket CPU node with 2*12 cores, you would set OMP_NUM_THREADS=11 and run 2 tasks on such a node, mapping them by socket)
 - export TF_USE_CUDNN=0
 - Run multiple tasks with e.g.
 mpirun --map-by ppr:1:socket:PE=12 -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH -x TF_USE_CUDNN -x OMP_NUM_THREADS python -u main.py <args>
