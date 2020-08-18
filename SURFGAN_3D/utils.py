@@ -4,7 +4,12 @@ from tensorflow.python.ops import array_ops
 import ast
 from multiprocessing import Pool
 import os
+import horovod.tensorflow as hvd
 
+# log0 only logs from hvd.rank() == 0
+def log0(string):
+    if hvd.rank() == 0:
+        print(string)
 
 def parse_tuple(string):
     s = ast.literal_eval(str(string))
