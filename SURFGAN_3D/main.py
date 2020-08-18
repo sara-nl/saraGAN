@@ -8,7 +8,7 @@ import random
 from metrics import (calculate_fid_given_batch_volumes, get_swd_for_volumes,
                      get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
 from dataset import NumpyPathDataset
-from utils import count_parameters, image_grid, parse_tuple, MPMap
+from utils import count_parameters, image_grid, parse_tuple, MPMap, log0
 # from mpi4py import MPI
 import os
 import importlib
@@ -18,7 +18,10 @@ import psutil
 from networks.ops import num_filters
 from tensorflow.data.experimental import AUTOTUNE
 import nvgpu
+import logging
 
+# For TensorBoard Debugger:
+from tensorflow.python import debug as tf_debug
 
 def main(args, config):
 
@@ -27,14 +30,21 @@ def main(args, config):
         global_size = hvd.size()
         global_rank = hvd.rank()
         local_rank = hvd.local_rank()
+        # Print warnings only for Rank 0, others only print errors:
+        if not verbose:
+            tf.get_logger().setLevel(logging.ERROR)
     else:
         verbose = True
         global_size = 1
         global_rank = 0
         local_rank = 0
 
-    timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
-    logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
+    if args.logdir is not None:
+        logdir = args.logdir
+    else:
+        timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
+        logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
+
     os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
     if verbose:
         writer = tf.summary.FileWriter(logdir=logdir)
@@ -185,7 +195,10 @@ def main(args, config):
 
             # Specify alpha update op for mixing phase.
             num_steps = args.mixing_nimg // (batch_size * global_size)
-            alpha_update = 1 / num_steps
+            # This original code produces too large steps when performing a run that is restarted in the middle of the alpha mixing phase:
+            # alpha_update = 1 / num_steps
+            # This code produces a correct step size when restarting (the same step size that would be used if a run wasn't restarted)
+            alpha_update = args.starting_alpha / num_steps
             # noinspection PyTypeChecker
             update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
 
@@ -357,6 +370,8 @@ def main(args, config):
         assign_starting_alpha = alpha.assign(args.starting_alpha)
         assign_zero = alpha.assign(0)
         broadcast = hvd.broadcast_global_variables(0)
+        #print("Global variables:")
+        #print("%s" % tf.compat.v1.global_variables())
 
         with tf.Session(config=config) as sess:
             # if args.gpu:
@@ -372,12 +387,14 @@ def main(args, config):
                 load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
+                print("Variables restored!")
             elif var_list is not None and args.continue_path and phase == args.starting_phase:
                 print("Restoring variables from:", args.continue_path)
                 var_names = [v.name for v in var_list]
                 load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
                 saver = tf.train.Saver(load_vars)
                 saver.restore(sess, os.path.join(args.continue_path))
+                print("Variables restored!")
             else:
                 if verbose:
                      print("Not restoring variables.")
@@ -396,36 +413,56 @@ def main(args, config):
             if verbose:
                 print(f"Begin mixing epochs in phase {phase}")
             if args.horovod:
+                if verbose:
+                    print("Broadcasting initial global variables...")
                 sess.run(broadcast)
+                if verbose:
+                    print("Broadcast completed")
 
             local_step = 0
             # take_first_snapshot = True
 
             while True:
                 start = time.time()
-                if local_step % 2048 == 0 and local_step > 1:
+                if global_step % args.checkpoint_every_nsteps < (batch_size*global_size) and local_step > 0:
                     if args.horovod:
+                        if verbose:
+                            print("Broadcasting global variables for checkpointing...")
                         sess.run(broadcast)
+                        if verbose:
+                            print("Broadcast completed")
                     saver = tf.train.Saver(var_list)
                     if verbose:
+                        print(f'Writing checkpoint file: model_{phase}_ckpt_{global_step}')
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
+                #print("Batching...")
                 batch_loc = np.random.randint(0, len(npy_data) - batch_size)
                 batch_paths = npy_data[batch_loc: batch_loc + batch_size]
                 batch = np.stack([np.load(path) for path in batch_paths])
                 batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
+                #print("Got a batch!")
 
-                _, _, summary, d_loss, g_loss = sess.run(
-                     [train_gen, train_disc, merged_summaries,
-                      disc_loss, gen_loss], feed_dict={real_image_input: batch})
+                #sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="readline")
+                #sess = tf_debug.TensorBoardDebugWrapperSession(sess, 'localhost:6789')
+                if local_step % args.summary_every_nsteps == 0:
+                    _, _, summary, d_loss, g_loss = sess.run(
+                         [train_gen, train_disc, merged_summaries,
+                          disc_loss, gen_loss], feed_dict={real_image_input: batch})
+                else:
+                    _, _, d_loss, g_loss = sess.run(
+                         [train_gen, train_disc, disc_loss, gen_loss],
+                         feed_dict={real_image_input: batch})
+                #print("Completed step")
                 global_step += batch_size * global_size
                 local_step += 1
 
                 end = time.time()
-                img_s = global_size * batch_size / (end - start)
+                local_img_s = batch_size / (end - start)
+                img_s = global_size * local_img_s
                 if verbose:
 
-                    if local_step % 32 == 0:
+                    if local_step % args.summary_every_nsteps == 0:
                         writer.add_summary(summary, global_step)
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
@@ -438,9 +475,11 @@ def main(args, config):
 
                     # writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
                     #                    global_step)
-
-                    print(f"Step {global_step:09} \t"
+                    current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
+                    print(f"{current_time} \t"
+                          f"Step {global_step:09} \t"
                           f"img/s {img_s:.2f} \t "
+                          f"img/s/worker {local_img_s:.3f} \t"
                           f"d_loss {d_loss:.4f} \t "
                           f"g_loss {g_loss:.4f} \t "
                           # f"memory {memory_percentage:.4f} % \t"
@@ -482,12 +521,13 @@ def main(args, config):
             while True:
                 start = time.time()
                 assert alpha.eval() == 0
-                if local_step % 2048 == 0 and local_step > 0:
+                if global_step % args.checkpoint_every_nsteps == 0 < (batch_size*global_size) and local_step > 0:
 
                     if args.horovod:
                         sess.run(broadcast)
                     saver = tf.train.Saver(var_list)
                     if verbose:
+                        print(f'Writing checkpoint file: model_{phase}_ckpt_{global_step}')
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
                 batch_loc = np.random.randint(0, len(npy_data) - batch_size)
@@ -495,18 +535,28 @@ def main(args, config):
                 batch = np.stack([np.load(path) for path in batch_paths])
                 batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
 
-                _, _, summary, d_loss, g_loss = sess.run(
-                    [train_gen, train_disc, merged_summaries,
-                     disc_loss, gen_loss], feed_dict={real_image_input: batch})
+                if local_step % args.summary_every_nsteps == 0:
+                    _, _, summary, d_loss, g_loss = sess.run(
+                        [train_gen, train_disc, merged_summaries,
+                        disc_loss, gen_loss], feed_dict={real_image_input: batch})
+                else:
+                    _, _, d_loss, g_loss = sess.run(
+                        [train_gen, train_disc, disc_loss, gen_loss], 
+                        feed_dict={real_image_input: batch})
+
+#                _, _, d_loss, g_loss = sess.run(
+#                        [train_gen, train_disc, disc_loss, gen_loss],
+#                        feed_dict={real_image_input: batch})
 
                 global_step += batch_size * global_size
                 local_step += 1
 
                 end = time.time()
-                img_s = global_size * batch_size / (end - start)
+                local_img_s = batch_size / (end - start)
+                img_s = global_size * local_img_s
                 if verbose:
 
-                    if local_step % 32 == 0:
+                    if local_step % args.summary_every_nsteps == 0:
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s',
                                                                             simple_value   =img_s)]),
                                         global_step)
@@ -520,9 +570,11 @@ def main(args, config):
 
                     # writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
                     #                    global_step)
-
-                    print(f"Step {global_step:09} \t"
+                    current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
+                    print(f"{current_time} \t"
+                          f"step {global_step:09} \t"
                           f"img/s {img_s:.2f} \t "
+                          f"img/s/worker {local_img_s:.3f} \t"
                           f"d_loss {d_loss:.4f} \t "
                           f"g_loss {g_loss:.4f} \t "
                           # f"memory {memory_percentage:.4f} % \t"
@@ -680,6 +732,7 @@ def main(args, config):
                 # Save Session.
                 sess.run(ema_update_weights)
                 saver = tf.train.Saver(var_list)
+                print("Writing final checkpoint file: model_{phase}")
                 saver.save(sess, os.path.join(logdir, f'model_{phase}'))
 
             if args.ending_phase:
@@ -732,7 +785,10 @@ if __name__ == '__main__':
     parser.add_argument('--num_labels', default=None, type=int)
     parser.add_argument('--g_clipping', default=False, type=bool)
     parser.add_argument('--d_clipping', default=False, type=bool)
+    parser.add_argument('--summary_every_nsteps', default=32, type=int, help="Summaries are saved every time the locally processsed image counter is a multiple of this number")
     # parser.add_argument('--load_phase', default=None, type=int)
+    parser.add_argument('--checkpoint_every_nsteps', default=3000, type=int, help="Checkpoint files are saved every time the globally processed image counter is (approximately) a multiple of this number. Technically, the counter needs to satisfy: counter % checkpoint_every_nsteps < global_batch_size.")
+    parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc") 
     args = parser.parse_args()
 
     # if args.coninue_path:
