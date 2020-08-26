@@ -7,8 +7,9 @@ This repository hosts the 2D and 3D versions of the saraGAN.
 To run saraGAN 3D you'll need
 - TensorFlow 1.14 or 1.15
 - Horovod (optional, for multi-GPU or multinode training)
-- skimage (install with pip)
+- scikit-image (install with pip)
 - nvgpu (install with pip)
+- imageio (install with pip)
 
 ### How to run
 - Load any modules or virtual environments that contain the above dependencies.
