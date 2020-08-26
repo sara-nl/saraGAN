@@ -1,0 +1,100 @@
+#!/bin/bash
+#SBATCH -N 2
+#SBATCH --ntasks-per-node=1
+###SBATCH -c 32
+#SBATCH -p short
+#SBATCH -t 10:00
+#SBATCH --constraint=haswell
+##SBATCH --constraint=[island1|island2|island3|island4|island5|fat]
+
+DATETIME=$(date "+%Y%m%d_%H%M%S")
+
+# ==============
+# CONFIGURABLES:
+# ==============
+SURFGAN_ROOT=/home/${USER}/NKI/saraGAN/SURFGAN_3D
+NETWORK_ARCH=pgan
+CONTINUE_PATH=${SURFGAN_ROOT}/runs/model_6_medium/model_6
+# Place to store tf.summaries and model checkpoints:
+LOGDIR=${SURFGAN_ROOT}/runs/${NETWORK_ARCH}/${DATETIME}
+# Place where this jobscript will be logged
+BATCH_BACKUP=${LOGDIR}/jobscript.sh
+BATCH_OUT=${LOGDIR}/slurm-${SLURM_JOB_ID}.out
+export OMP_NUM_THREADS=11
+export KMP_SETTINGS=True
+export KMP_AFFINITY="granularity=fine,compact,1,0"
+export TF_USE_CUDNN=0
+# ==============
+
+mkdir -p ${LOGDIR}
+echo "Output of this job can be found in: ${BATCH_OUT}"
+
+echo "Logging batch script to ${BATCH_BACKUP}" > ${BATCH_OUT}
+cat "$0" > ${BATCH_BACKUP}
+
+{
+
+echo "Started at:"
+date
+
+#module use /home/druhe/environment-modules-lisa
+#module load 2020
+#module load TensorFlow/1.15.0-foss-2019b-Python-3.7.4-10.1.243
+
+source ~/venvs/surfgan/bin/activate
+module purge
+module load 2019
+module load Horovod/0.19.4-fosscuda-2018b-TensorFlow-1.15.3-Python-3.6.6
+export OMP_NUM_THREADS=23
+export KMP_SETTINGS=True
+export KMP_AFFINITY="granularity=fine,compact,1,0"
+#export OMP_PLACES=cores
+#export OMP_PROC_BIND=close
+# export PATH=/sw/arch/Debian9/EB_production/2019/software/CUDA/10.0.130/:$PATH
+# module load Anaconda3
+# module load cuDNN/7.6.5.32-CUDA-10.1.243
+# module load NCCL/2.5.6-CUDA-10.1.243
+# module load OpenMPI/3.1.4-GCC-7.3.0-2.30
+# source activate py37
+echo "Loaded modules:"
+module list
+
+# . /home/druhe/envs/bin_py36_tf115_hvd018/setup.sh
+
+cd ${SURFGAN_ROOT}
+
+#export TF_CUDNN_USE_AUTOTUNE=1
+# export NCCL_P2P_DISABLE=1
+
+# mpirun --map-by ppr:1:socket:PE=12 \
+#        -x NCCL_DEBUG=INFO -x HOROVOD_MPI_THREADS_DISABLE=1 -x LD_LIBRARY_PATH -x PATH -x TF_USE_CUDNN -x OMP_NUM_THREADS \
+#        python -u main.py pgan /projects/2/managed_datasets/LIDC-IDRI/npy/average/ '(1, 64, 256, 256)' --starting_phase 7 --ending_phase 8 --latent_dim 512 --horovod  --scratch_path /scratch-local/$USER --base_batch_size 32 --network_size m --starting_alpha 1 --loss_fn wgan --gp_weight 10 --d_lr 5e-5 --g_lr 5e-5 --continue_path $CONTINUE_PATH --num_inter_ops 1
+
+mpirun --bind-to none --report-bindings --mca btl ^openib --mca btl_tcp_if_include 10.200.0.0/16 -x NCCL_DEBUG=INFO -x HOROVOD_MPI_THREADS_DISABLE=1 -x LD_LIBRARY_PATH -x PATH -x TF_USE_CUDNN -x OMP_NUM_THREADS \
+        python -u main.py pgan /projects/2/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 7 --ending_phase 8 --latent_dim 512 --horovod  --scratch_path /scratch-shared/$USER --base_batch_size 32 --network_size m --starting_alpha 1 --loss_fn wgan --gp_weight 10 --d_lr 5e-5 --g_lr 5e-5 --continue_path $CONTINUE_PATH --num_inter_ops 1 --logdir $LOGDIR
+
+#mpirun python -u main.py pgan /projects/2/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 1 --ending_phase 8 --latent_dim 512 --horovod  --scratch_path /scratch-shared/$USER --base_batch_size 32 --network_size m --starting_alpha 1 --loss_fn wgan --gp_weight 10 --d_lr 5e-5 --g_lr 5e-5 --num_inter_ops 1
+
+echo "Finished at:"
+date
+
+# Vali's command from Endeavor:
+# python -u main.py pgan ${DATA_DIR} '(1, 128, 512, 512)' --starting_phase 7 --ending_phase 8 --latent_dim 512 --horovod --starting_alpha 1 --scratch_path /tmp/$USER --base_batch_size 32 --network_size m --loss_fn wgan --gp_weight 10 --d_lr 5e-5 --g_lr 5e-5 --continue_path $CONTINUE_PATH
+
+
+#mpirun -np 8 -npernode 4 \
+#       -bind-to none \
+#       -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH -x TF_USE_CUDNN \
+#       -mca pml ob1 -mca btl ^openib \
+#       python -u main.py pgan2 /nfs/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 7 --ending_phase 7 --latent_dim 512 --horovod --starting_alpha 0 --scratch_path /scratch/$USER --gpu --base_batch_size 32 --network_size s --loss_fn logistic --gp_weight 1 --d_lr 1e-4 --g_lr 1e-3 --continue_path $CONTINUE_PATH
+
+
+#mpirun -np 4 -npernode 4 \
+#    -bind-to none -map-by slot \
+#    -x NCCL_DEBUG=INFO -x LD_LIBRARY_PATH -x PATH \
+#    -mca pml ob1 -mca btl ^openib \
+#    python train.py python -u main.py surfgan /nfs/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 7 --ending_phase 7 --latent_dim 512 --horovod --starting_alpha 1 --scratch_path /scratch/$USER --gpu --base_batch_size 32 --network_size s --loss_fn wgan --gp_weight 10 --d_lr 1e-4 --g_lr 1e-3 --continue_path $CONTINUE_PATH
+#
+# --continue_path $CONTINUE_PATH 
+# mpirun -n 4 -npernode 4 python -u main.py pgan2 /nfs/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --scratch_path '/scratch/' --starting_phase 4 --ending_phase 4 --base_dim 512 --latent_dim 512 --horovod --starting_alpha 0 --gpu --base_batch_size=128 --network_size medium --optim_strategy alternate
+} > ${BATCH_OUT} 2>&1
