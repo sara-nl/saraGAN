@@ -5,6 +5,9 @@ from skimage.measure import block_reduce
 
 DEBUG=False
 min_array=[]
+intercept = -2048
+clip_value = 2048
+
 
 def convert_all(prefix='/projects/0/radioct/14/', saveprefix='/projects/0/radioct/14_pgan/', ext='.nrrd', reduce_fn=np.average):
     header_array = []
@@ -119,8 +122,6 @@ def convert_one(inputfile, saveprefix, savefilename, reduce_fn, counters):
     ct_array = np.moveaxis(ct_array, -1, 0)
 
     # Rescale values by the intercept, which SEEMS to be -2048 in these scans...
-    intercept = -2048
-    clip_value = 2048
     if DEBUG:
         minimum = np.minimum(ct_array)
         print(f'Minimum: {minimum}')
@@ -175,7 +176,8 @@ def pad_to(data, target_dim, center=[True, True, True]):
     pad_list = [(int(pmin), int(pmax)) for pmin, pmax in zip(pad_min, pad_max)]
     if DEBUG:
         print(f"Padding image from {source_dim} to {target_dim} using padding list: {pad_list}")
-    padded_data = np.pad(data, pad_list, mode='constant', constant_values=0)
+    # We use the intercept as padding value, that makes the most sense since then, after rescaling, it will be '0'
+    padded_data = np.pad(data, pad_list, mode='constant', constant_values=intercept)
 
     # Sanity check:
     assert all( [ tdim <= pdim for tdim, pdim in zip(target_dim, padded_data.shape) ] )
