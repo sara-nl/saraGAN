@@ -56,11 +56,25 @@ def main(args, config):
         pass
         # writer = None
 
+    # Get starting & final resolutions
+    start_shape = parse_tuple(args.start_shape)
+    start_resolution = start_shape[-1]
     final_shape = parse_tuple(args.final_shape)
     image_channels = final_shape[0]
     final_resolution = final_shape[-1]
-    num_phases = int(np.log2(final_resolution) - 1)
+
+    # Number of phases required to get from the starting resolution to the final resolution
+    num_phases = int(np.log2(final_resolution/start_resolution))
+    # Number of filters at the base of the progressive network
+    # In other words: at the starting resolution, this is the amount of filters that will be used
+    # In subsequent phases, the number of filters will go down as the resolution goes up.
     base_dim = num_filters(-num_phases + 1, num_phases, size=args.network_size)
+
+    if verbose:
+        print(f"Start resolution: {start_resolution}")
+        print(f"Final resolution: {final_resolution}")
+        print(f"Deduced number of phases: {num_phases}")
+        print(f"base_dim: {base_dim}")
 
     var_list = list()
     global_step = 0
@@ -72,9 +86,11 @@ def main(args, config):
         # ------------------------------------------------------------------------------------------#
         # DATASET
 
-        size = 2 * 2 ** phase
+        size = start_resolution * (2 ** (phase - 1))
 
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
+        if verbose:
+            print(f'Phase {phase}: reading data from dir {data_path}')
         npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=local_rank == 0,
                                     is_correct_phase=phase >= args.starting_phase)
 
@@ -116,10 +132,12 @@ def main(args, config):
         # else:
         #     raise NotImplementedError()
 
-        zdim_base = max(1, final_shape[1] // (2 ** (num_phases - 1)))
-        base_shape = (image_channels, zdim_base, 4, 4)
+#zdim_base = max(1, final_shape[1] // (2 ** num_phases))
+        base_shape = (image_channels, start_shape[1], start_shape[2], start_shape[3])
         current_shape = [batch_size, image_channels, *[size * 2 ** (phase - 1) for size in
                                                        base_shape[1:]]]
+        if verbose:
+            print(f'base_shape: {base_shape}, current_shape: {current_shape}')
         real_image_input = tf.placeholder(shape=current_shape, dtype=tf.float32)
 
         # real_image_input = tf.random.normal([1, batch_size, image_channels, *[size * 2 ** (phase -
@@ -336,15 +354,30 @@ def main(args, config):
             tf.summary.scalar('max_g_grad_norm', max_g_norm)
             tf.summary.scalar('max_d_grad_norm', max_d_norm)
 
+            # Spread out 3D image as 2D grid, slicing in the z-dimension
             real_image_grid = tf.transpose(real_image_input[0], (1, 2, 3, 0))
             shape = real_image_grid.get_shape().as_list()
+            print(f'real_image_grid shape: {shape}')
             grid_cols = int(2 ** np.floor(np.log(np.sqrt(shape[0])) / np.log(2)))
-            grid_rows = shape[0] // grid_cols
+            # If the image z-dimension isn't divisible by grid_rows, we need to pad
+            if (shape[0] % grid_cols) != 0:
+                # Initialize pad_list for numpy padding
+                pad_list = [[0,0] for i in range(0, len(shape))]
+                # Compute number of slices we need to add to get to the next multiple of shape[0]
+                pad_nslices = grid_cols - (shape[0] % grid_cols)
+                pad_list[0] = [0, pad_nslices]
+                real_image_grid = tf.pad(real_image_grid, tf.constant(pad_list), "CONSTANT", constant_values=0)
+                # Recompute shape, so that the number of grid_rows is adapted to that
+                shape = real_image_grid.get_shape().as_list()
+            grid_rows = int(np.ceil(shape[0] / grid_cols))
             grid_shape = [grid_rows, grid_cols]
             real_image_grid = image_grid(real_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
 
             fake_image_grid = tf.transpose(gen_sample[0], (1, 2, 3, 0))
+            # Use the same padding for the fake_image_grid
+            if (fake_image_grid.get_shape().as_list()[0] % grid_cols) != 0:
+                fake_image_grid = tf.pad(fake_image_grid, tf.constant(pad_list), "CONSTANT", constant_values=0)
             fake_image_grid = image_grid(fake_image_grid, grid_shape, image_shape=shape[1:3],
                                          num_channels=shape[-1])
 
@@ -745,7 +778,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('architecture', type=str)
     parser.add_argument('dataset_path', type=str)
-    parser.add_argument('final_shape', type=str, help="'(c, z, y, x)', e.g. '(1, 64, 128, 128)'")
+    parser.add_argument('--start_shape', type=str, default=None, required=True, help="Shape of the data at phase 0, '(c, z, y, x)', e.g. '(1, 5, 16, 16)'")
+    parser.add_argument('--final_shape', type=str, default=None, required=True, help="'(c, z, y, x)', e.g. '(1, 64, 128, 128)'")
     parser.add_argument('--starting_phase', type=int, default=None, required=True)
     parser.add_argument('--ending_phase', type=int, default=None, required=True)
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
@@ -787,8 +821,8 @@ if __name__ == '__main__':
     parser.add_argument('--d_clipping', default=False, type=bool)
     parser.add_argument('--summary_every_nsteps', default=32, type=int, help="Summaries are saved every time the locally processsed image counter is a multiple of this number")
     # parser.add_argument('--load_phase', default=None, type=int)
-    parser.add_argument('--checkpoint_every_nsteps', default=3000, type=int, help="Checkpoint files are saved every time the globally processed image counter is (approximately) a multiple of this number. Technically, the counter needs to satisfy: counter % checkpoint_every_nsteps < global_batch_size.")
-    parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc") 
+    parser.add_argument('--checkpoint_every_nsteps', default=20000, type=int, help="Checkpoint files are saved every time the globally processed image counter is (approximately) a multiple of this number. Technically, the counter needs to satisfy: counter % checkpoint_every_nsteps < global_batch_size.")
+    parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc")
     args = parser.parse_args()
 
     # if args.coninue_path:
