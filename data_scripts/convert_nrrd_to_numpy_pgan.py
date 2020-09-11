@@ -2,11 +2,31 @@ import os, glob, re
 import nrrd
 import numpy as np
 from skimage.measure import block_reduce
+import functools
+import multiprocessing
+import SimpleITK as sitk
 
 DEBUG=False
 min_array=[]
-intercept = -2048
+intercept = -1024
 clip_value = 2048
+
+def loop_element(file, saveprefix, reduce_fn, counters, search_string, header_array):
+    print("")
+    print(f"Processing: {file}")
+    # TESTING: only on the first 100 files
+#    if i < 100:
+#        i = i+1
+    savefilename = search_string.match(file).group(1).replace('/','_')
+    # Strip .nrrd extension since we want to save numpy files
+    savefilename = os.path.splitext(savefilename)[0]
+    savefilename = f'{savefilename}.npy'
+
+    tmp_header = convert_one(file, saveprefix, savefilename, reduce_fn, counters)
+    if tmp_header:
+        header_array.append(tmp_header)
+    print(counters)
+
 
 
 def convert_all(prefix='/projects/0/radioct/14/', saveprefix='/projects/0/radioct/14_pgan/', ext='.nrrd', reduce_fn=np.average):
@@ -26,21 +46,24 @@ def convert_all(prefix='/projects/0/radioct/14/', saveprefix='/projects/0/radioc
         "zdim": 0,
     }
 
-    for file in glob.glob(f"{prefix}/*/*/*{ext}"):
-        print("")
-        print(f"Processing: {file}")
-        # TESTING: only on the first 100 files
-#        if i < 100:
-#            i = i+1
-        savefilename = search_string.match(file).group(1).replace('/','_')
-        # Strip .nrrd extension since we want to save numpy files
-        savefilename = os.path.splitext(savefilename)[0]
-        savefilename = f'{savefilename}.npy'
+    a_pool = multiprocessing.Pool()
+    a_pool.map(functools.partial(loop_element, saveprefix = saveprefix, reduce_fn = reduce_fn, counters = counters, search_string = search_string, header_array = header_array), glob.glob(f"{prefix}/*/*/*{ext}"))
 
-        tmp_header = convert_one(file, saveprefix, savefilename, reduce_fn, counters)
-        if tmp_header:
-            header_array.append(tmp_header)
-        print(counters)
+#     for file in glob.glob(f"{prefix}/*/*/*{ext}"):
+#         print("")
+#         print(f"Processing: {file}")
+#         # TESTING: only on the first 100 files
+# #        if i < 100:
+# #            i = i+1
+#         savefilename = search_string.match(file).group(1).replace('/','_')
+#         # Strip .nrrd extension since we want to save numpy files
+#         savefilename = os.path.splitext(savefilename)[0]
+#         savefilename = f'{savefilename}.npy'
+# 
+#         tmp_header = convert_one(file, saveprefix, savefilename, reduce_fn, counters)
+#         if tmp_header:
+#             header_array.append(tmp_header)
+#         print(counters)
 
     nheaders = len(header_array)
     print(f"Selected #headers: {nheaders}")
@@ -101,10 +124,13 @@ def convert_one(inputfile, saveprefix, savefilename, reduce_fn, counters):
 #        counters['zdim'] = counters['zdim'] + 1
 
     # If we are here, scan is accepted, so continue to read the actual data
-    ct_array, header = nrrd.read(inputfile)
+    # Since nrrd doesn't apply transformations according to orientation in the header, we use ITK:
+    ct_array = sitk.GetArrayFromImage(sitk.ReadImage(inputfile))
+#    ct_array, header = nrrd.read(inputfile)
 
     # Padding & cropping
-    target_dim = [512, 512, 160]
+    target_dim = [160, 512, 512] # ITK has z-dim first
+#    target_dim = [512, 512, 160]
 
     old_dim = ct_array.shape
     ct_array = pad_to(ct_array, target_dim)
@@ -118,10 +144,12 @@ def convert_one(inputfile, saveprefix, savefilename, reduce_fn, counters):
         counters['cropped'] = counters['cropped'] + 1
         print(f"Cropped from: {old_dim} to {ct_array.shape}")
 
-    # Reorder dimensions to put zdim first, since this is what SURFGAN3D expects
-    ct_array = np.moveaxis(ct_array, -1, 0)
+    # nrrd has zdim last, so reorder dimensions to put zdim first, since this is what SURFGAN3D expects
+    # not needed for ITK
+    #    ct_array = np.moveaxis(ct_array, -1, 0)
 
-    # Rescale values by the intercept, which SEEMS to be -2048 in these scans...
+    # Rescale values by the intercept. The intercept seems to be mixed in these scans
+    # We rescale with one value, defined at the top of this script. The rest is clipped to be zero.
     if DEBUG:
         minimum = np.minimum(ct_array)
         print(f'Minimum: {minimum}')
