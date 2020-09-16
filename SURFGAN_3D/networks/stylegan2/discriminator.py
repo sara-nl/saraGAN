@@ -44,7 +44,7 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
         return x
 
 
-def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation, param=None, is_reuse=False, size='medium'):
+def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim, activation, param=None, is_reuse=False, size='medium'):
 
     with tf.variable_scope('discriminator') as scope:
 
@@ -52,13 +52,13 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
             scope.reuse_variables()
 
         with tf.variable_scope(f'from_rgb_{phase}'):
-            filters_out = num_filters(phase, num_phases, base_dim, size=size)
+            filters_out = num_filters(phase, num_phases, base_shape, base_dim, size=size)
             x = from_rgb(x, filters_out, activation, param=param)
 
         for i in reversed(range(2, phase + 1)):
             with tf.variable_scope(f'discriminator_block_{i}'):
-                filters_in = num_filters(i, num_phases, base_dim, size=size)
-                filters_out = num_filters(i - 1, num_phases, base_dim, size=size)
+                filters_in = num_filters(i, num_phases, base_shape, base_dim, size=size)
+                filters_out = num_filters(i - 1, num_phases, base_shape, base_dim, size=size)
                 x = discriminator_block(x, filters_in, filters_out, activation, param=param)
 
         x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, param)
@@ -74,7 +74,7 @@ if __name__ == '__main__':
         tf.reset_default_graph()
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         x = tf.random.normal(shape=shape)
-        y = discriminator(x, 0.5, phase, num_phases, base_dim, latent_dim, activation='leaky_relu', param=0.3)
+        y = discriminator(x, 0.5, phase, num_phases, base_shape, base_dim, latent_dim, activation='leaky_relu', param=0.3)
 
         loss = tf.reduce_sum(y)
         optim = tf.train.GradientDescentOptimizer(1e-5)

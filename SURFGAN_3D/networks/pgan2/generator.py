@@ -71,7 +71,7 @@ def generator(x, alpha, phase, num_phases, base_dim, base_shape, activation, par
 
         for i in range(2, phase + 1):
 
-            filters_out = num_filters(i, num_phases, base_dim, size=size)
+            filters_out = num_filters(i, num_phases, base_shape, base_dim, size=size)
             with tf.variable_scope(f'generator_block_{i}'):
                 x = generator_block(x, filters_out, activation=activation, param=param)
 
@@ -89,7 +89,7 @@ if __name__ == '__main__':
     num_phases = 8
     latent_dim = 512
     base_shape = [1, 1, 4, 4]
-    base_dim = num_filters(-num_phases + 1, num_phases, base_dim=None, size='m')
+    base_dim = num_filters(-num_phases + 1, num_phases, base_shape, base_dim=None, size='m')
     for phase in range(3, 4):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)

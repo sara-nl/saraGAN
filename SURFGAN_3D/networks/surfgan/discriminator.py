@@ -71,7 +71,7 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param, c
         return x
 
 
-def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation, conditioning=None, param=None, is_reuse=False, size='m', ):
+def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim, activation, conditioning=None, param=None, is_reuse=False, size='m', ):
 
     with tf.variable_scope('discriminator') as scope:
 
@@ -81,7 +81,7 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
         x_downscale = x
 
         with tf.variable_scope(f'from_rgb_{phase}') as scope:
-            filters_out = num_filters(phase, num_phases, base_dim, size=size)
+            filters_out = num_filters(phase, num_phases, base_shape, base_dim, size=size)
             filters_in = x.shape[1]
             x = from_rgb(x, filters_out, activation, param=param)
             print(f'{scope.name}\n\tOutput Shape: {x.shape}\tParameters: {1*1*1*filters_out * filters_in + filters_out}\tKernel: (1, 1, 1)')
@@ -89,8 +89,8 @@ def discriminator(x, alpha, phase, num_phases, base_dim, latent_dim, activation,
         for i in reversed(range(2, phase + 1)):
             with tf.variable_scope(f'discriminator_block_{i}') as scope:
                 print(scope.name)
-                filters_in = num_filters(i, num_phases, base_dim, size=size)
-                filters_out = num_filters(i - 1, num_phases, base_dim, size=size)
+                filters_in = num_filters(i, num_phases, base_shape, base_dim, size=size)
+                filters_out = num_filters(i - 1, num_phases, base_shape, base_dim, size=size)
                 x = discriminator_block(x, filters_in, filters_out, activation, param=param)
             if i == phase:
                 with tf.variable_scope(f'from_rgb_{phase - 1}'):

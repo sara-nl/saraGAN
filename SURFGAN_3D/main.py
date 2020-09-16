@@ -65,10 +65,14 @@ def main(args, config):
 
     # Number of phases required to get from the starting resolution to the final resolution
     num_phases = int(np.log2(final_resolution/start_resolution))
+
+    # Define the shape at the base of the network
+    base_shape = (image_channels, start_shape[1], start_shape[2], start_shape[3])
+
     # Number of filters at the base of the progressive network
     # In other words: at the starting resolution, this is the amount of filters that will be used
     # In subsequent phases, the number of filters will go down as the resolution goes up.
-    base_dim = num_filters(-num_phases + 1, num_phases, size=args.network_size)
+    base_dim = num_filters(1, num_phases, base_shape = base_shape, size=args.network_size)
 
     if verbose:
         print(f"Start resolution: {start_resolution}")
@@ -133,7 +137,6 @@ def main(args, config):
         #     raise NotImplementedError()
 
 #zdim_base = max(1, final_shape[1] // (2 ** num_phases))
-        base_shape = (image_channels, start_shape[1], start_shape[2], start_shape[3])
         current_shape = [batch_size, image_channels, *[size * 2 ** (phase - 1) for size in
                                                        base_shape[1:]]]
         if verbose:
@@ -287,7 +290,7 @@ def main(args, config):
                 args.network_size,
                 args.loss_fn,
                 args.gp_weight,
-                conditioning=real_label
+                # conditioning=real_label
             )
 
             disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
@@ -338,21 +341,24 @@ def main(args, config):
             [tf.assign(var, ema.average(var)) for var in gen_vars])
 
         with tf.name_scope('summaries'):
+            # We want to store large / heavy summaries like images less frequently
+            summary_small = []
+            summary_large = []
             # Summaries
-            tf.summary.scalar('d_loss', disc_loss)
-            tf.summary.scalar('g_loss', gen_loss)
-            tf.summary.scalar('gp', tf.reduce_mean(gp_loss))
+            summary_small.append(tf.summary.scalar('d_loss', disc_loss))
+            summary_small.append(tf.summary.scalar('g_loss', gen_loss))
+            summary_small.append(tf.summary.scalar('gp', tf.reduce_mean(gp_loss)))
 
             for g in zip(g_gradients, g_variables):
-                tf.summary.histogram(f'grad_{g[1].name}', g[0])
+                summary_small.append(tf.summary.histogram(f'grad_{g[1].name}', g[0]))
 
             for g in zip(d_gradients, d_variables):
-                tf.summary.histogram(f'grad_{g[1].name}', g[0])
+                summary_small.append(tf.summary.histogram(f'grad_{g[1].name}', g[0]))
 
             # tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
 
-            tf.summary.scalar('max_g_grad_norm', max_g_norm)
-            tf.summary.scalar('max_d_grad_norm', max_d_norm)
+            summary_small.append(tf.summary.scalar('max_g_grad_norm', max_g_norm))
+            summary_small.append(tf.summary.scalar('max_d_grad_norm', max_d_norm))
 
             # Spread out 3D image as 2D grid, slicing in the z-dimension
             real_image_grid = tf.transpose(real_image_input[0], (1, 2, 3, 0))
@@ -383,20 +389,22 @@ def main(args, config):
 
             fake_image_grid = tf.clip_by_value(fake_image_grid, -1, 2)
 
-            tf.summary.image('real_image', real_image_grid)
-            tf.summary.image('fake_image', fake_image_grid)
+            summary_large.append(tf.summary.image('real_image', real_image_grid))
+            summary_large.append(tf.summary.image('fake_image', fake_image_grid))
 
-            tf.summary.scalar('fake_image_min', tf.math.reduce_min(gen_sample))
-            tf.summary.scalar('fake_image_max', tf.math.reduce_max(gen_sample))
+            summary_small.append(tf.summary.scalar('fake_image_min', tf.math.reduce_min(gen_sample)))
+            summary_small.append(tf.summary.scalar('fake_image_max', tf.math.reduce_max(gen_sample)))
 
-            tf.summary.scalar('real_image_min', tf.math.reduce_min(real_image_input[0]))
-            tf.summary.scalar('real_image_max', tf.math.reduce_max(real_image_input[0]))
-            tf.summary.scalar('alpha', alpha)
+            summary_small.append(tf.summary.scalar('real_image_min', tf.math.reduce_min(real_image_input[0])))
+            summary_small.append(tf.summary.scalar('real_image_max', tf.math.reduce_max(real_image_input[0])))
+            summary_small.append(tf.summary.scalar('alpha', alpha))
 
-            tf.summary.scalar('g_lr', g_lr)
-            tf.summary.scalar('d_lr', d_lr)
+            summary_small.append(tf.summary.scalar('g_lr', g_lr))
+            summary_small.append(tf.summary.scalar('d_lr', d_lr))
 
-            merged_summaries = tf.summary.merge_all()
+            # merged_summaries = tf.summary.merge_all()
+            summary_small = tf.summary.merge(summary_small)
+            summary_large = tf.summary.merge(summary_large)
 
         # Other ops
         init_op = tf.global_variables_initializer()
@@ -432,6 +440,7 @@ def main(args, config):
                 if verbose:
                      print("Not restoring variables.")
                      print("Variable List Length:", len(var_list))
+                     writer.add_graph(sess.graph)
 
             var_list = gen_vars + disc_vars
 
@@ -478,9 +487,15 @@ def main(args, config):
 
                 #sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="readline")
                 #sess = tf_debug.TensorBoardDebugWrapperSession(sess, 'localhost:6789')
-                if local_step % args.summary_every_nsteps == 0:
-                    _, _, summary, d_loss, g_loss = sess.run(
-                         [train_gen, train_disc, merged_summaries,
+                small_summary_bool = (local_step % args.summary_small_every_nsteps == 0)
+                large_summary_bool = (local_step % args.summary_large_every_nsteps == 0)
+                if small_summary_bool:
+                    _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
+                         [train_gen, train_disc, summary_small, summary_large,
+                          disc_loss, gen_loss], feed_dict={real_image_input: batch})
+                elif large_summary_bool:
+                    _, _, summary_s, d_loss, g_loss = sess.run(
+                         [train_gen, train_disc, summary_small,
                           disc_loss, gen_loss], feed_dict={real_image_input: batch})
                 else:
                     _, _, d_loss, g_loss = sess.run(
@@ -495,8 +510,11 @@ def main(args, config):
                 img_s = global_size * local_img_s
                 if verbose:
 
-                    if local_step % args.summary_every_nsteps == 0:
-                        writer.add_summary(summary, global_step)
+                    if large_summary_bool:
+                        writer.add_summary(summary_s, global_step)
+                        writer.add_summary(summary_l, global_step)
+                    elif small_summary_bool:
+                        writer.add_summary(summary_s, global_step)
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
                     # memory_percentage = psutil.Process(os.getpid()).memory_percent()
@@ -568,9 +586,15 @@ def main(args, config):
                 batch = np.stack([np.load(path) for path in batch_paths])
                 batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
 
-                if local_step % args.summary_every_nsteps == 0:
-                    _, _, summary, d_loss, g_loss = sess.run(
-                        [train_gen, train_disc, merged_summaries,
+                small_summary_bool = (local_step % args.summary_small_every_nsteps == 0)
+                large_summary_bool = (local_step % args.summary_large_every_nsteps == 0)
+                if large_summary_bool:
+                    _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
+                        [train_gen, train_disc, summary_small, summary_large,
+                        disc_loss, gen_loss], feed_dict={real_image_input: batch}) 
+                elif small_summary_bool:
+                    _, _, summary_s, d_loss, g_loss = sess.run(
+                        [train_gen, train_disc, summary_small,
                         disc_loss, gen_loss], feed_dict={real_image_input: batch})
                 else:
                     _, _, d_loss, g_loss = sess.run(
@@ -589,11 +613,17 @@ def main(args, config):
                 img_s = global_size * local_img_s
                 if verbose:
 
-                    if local_step % args.summary_every_nsteps == 0:
+                    if large_summary_bool:
+                        print('Writing large summary')
+                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]), global_step)
+                        writer.add_summary(summary_s, global_step)
+                        writer.add_summary(summary_l, global_step)
+                    elif small_summary_bool:
+                        print('Writing small summary')
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s',
                                                                             simple_value   =img_s)]),
                                         global_step)
-                    writer.add_summary(summary, global_step)
+                        writer.add_summary(summary_s, global_step)
                     # memory_percentage = psutil.Process(os.getpid()).memory_percent()
                     # if not args.gpu:
                     #     memory_percentage = psutil.Process(os.getpid()).memory_percent()
@@ -819,7 +849,8 @@ if __name__ == '__main__':
     parser.add_argument('--num_labels', default=None, type=int)
     parser.add_argument('--g_clipping', default=False, type=bool)
     parser.add_argument('--d_clipping', default=False, type=bool)
-    parser.add_argument('--summary_every_nsteps', default=32, type=int, help="Summaries are saved every time the locally processsed image counter is a multiple of this number")
+    parser.add_argument('--summary_small_every_nsteps', default=32, type=int, help="Summaries are saved every time the locally processsed image counter is a multiple of this number")
+    parser.add_argument('--summary_large_every_nsteps', default=1000, type=int, help="Large summaries such as images are saved every time the locally processed image counter is a multiple of this number")
     # parser.add_argument('--load_phase', default=None, type=int)
     parser.add_argument('--checkpoint_every_nsteps', default=20000, type=int, help="Checkpoint files are saved every time the globally processed image counter is (approximately) a multiple of this number. Technically, the counter needs to satisfy: counter % checkpoint_every_nsteps < global_batch_size.")
     parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc")

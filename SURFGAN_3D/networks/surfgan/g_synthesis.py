@@ -71,7 +71,7 @@ def g_synthesis(d_z,
 
         for layer_idx in range(2, phase + 1):
 
-            filters_out = num_filters(layer_idx, num_phases, base_dim, size=size)
+            filters_out = num_filters(layer_idx, num_phases, base_shape, base_dim, size=size)
             with tf.variable_scope(f'generator_block_{layer_idx}'):
                 x = generator_block(x, filters_out, d_z, layer_idx, activation=activation,
                                     param=param)

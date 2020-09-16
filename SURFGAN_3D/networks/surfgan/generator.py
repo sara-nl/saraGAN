@@ -68,7 +68,7 @@ if __name__ == '__main__':
     latent_dim = 512
     base_shape = [1, 1, 4, 4]
     size = 'm'
-    base_dim = num_filters(-num_phases + 1, num_phases, base_dim=None, size=size)
+    base_dim = num_filters(-num_phases + 1, num_phases, base_shape, base_dim=None, size=size)
     for phase in range(8, 9):
         shape = [1, latent_dim]
         x = tf.random.normal(shape=shape)
