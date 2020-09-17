@@ -8,7 +8,7 @@ import random
 from metrics import (calculate_fid_given_batch_volumes, get_swd_for_volumes,
                      get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
 from dataset import NumpyPathDataset
-from utils import count_parameters, image_grid, parse_tuple, MPMap, log0
+from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
 # from mpi4py import MPI
 import os
 import importlib
@@ -190,12 +190,31 @@ def main(args, config):
         # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
         # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
 
-        lr_step = tf.Variable(0, name='step', dtype=tf.float32)
-        update_step = lr_step.assign_add(1.0)
+        intra_phase_step = tf.Variable(0, name='step', dtype=tf.int32)
+        update_intra_phase_step = intra_phase_step.assign_add(batch_size*global_size)
 
-        with tf.control_dependencies([update_step]):
-            update_g_lr = g_lr.assign(g_lr * args.g_annealing)
-            update_d_lr = d_lr.assign(d_lr * args.d_annealing)
+        # Turn arguments into constant Tensors
+        g_lr_max = tf.constant(args.g_lr, tf.float32)
+        d_lr_max = tf.constant(args.g_lr, tf.float32)
+        g_lr_rise_niter = tf.constant(args.g_lr_rise_niter)
+        d_lr_rise_niter = tf.constant(args.d_lr_rise_niter)
+        g_lr_decay_niter = tf.constant(args.g_lr_decay_niter)
+        d_lr_decay_niter = tf.constant(args.d_lr_decay_niter)
+        steps_per_phase = tf.constant(args.mixing_nimg + args.stabilizing_nimg)
+
+#        with tf.control_dependencies([update_intra_phase_step]):
+#            update_g_lr = g_lr.assign(g_lr * args.g_annealing)
+#            update_d_lr = d_lr.assign(d_lr * args.d_annealing)
+        update_g_lr = lr_update(lr = g_lr, intra_phase_step = intra_phase_step, 
+                                     steps_per_phase = steps_per_phase, lr_max = g_lr_max,
+                                     lr_increase = args.g_lr_increase, lr_decrease = args.g_lr_decrease,
+                                     lr_rise_niter = args.g_lr_rise_niter, lr_decay_niter = args.g_lr_decay_niter
+                                    )
+        update_d_lr = lr_update(lr = d_lr, intra_phase_step = intra_phase_step, 
+                                     steps_per_phase = steps_per_phase, lr_max = d_lr_max,
+                                     lr_increase = args.d_lr_increase, lr_decrease = args.d_lr_decrease,
+                                     lr_rise_niter = args.d_lr_rise_niter, lr_decay_niter = args.d_lr_decay_niter
+                                    )
 
         if args.horovod:
             if args.use_adasum:
@@ -466,6 +485,11 @@ def main(args, config):
 
             while True:
                 start = time.time()
+
+                # Update learning rate
+                d_lr_val = sess.run(update_d_lr)
+                g_lr_val = sess.run(update_g_lr)
+
                 if global_step % args.checkpoint_every_nsteps < (batch_size*global_size) and local_step > 0:
                     if args.horovod:
                         if verbose:
@@ -508,12 +532,19 @@ def main(args, config):
                 end = time.time()
                 local_img_s = batch_size / (end - start)
                 img_s = global_size * local_img_s
+
+                sess.run(update_alpha)
+                sess.run(ema_op)
+                in_phase_step = sess.run(update_intra_phase_step)
+
                 if verbose:
 
                     if large_summary_bool:
+                        print('Writing large summary...')
                         writer.add_summary(summary_s, global_step)
                         writer.add_summary(summary_l, global_step)
                     elif small_summary_bool:
+                        print('Writing small summary...')
                         writer.add_summary(summary_s, global_step)
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
@@ -529,10 +560,13 @@ def main(args, config):
                     current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
                     print(f"{current_time} \t"
                           f"Step {global_step:09} \t"
+                          f"Step(phase) {in_phase_step:09} \t"
                           f"img/s {img_s:.2f} \t "
                           f"img/s/worker {local_img_s:.3f} \t"
                           f"d_loss {d_loss:.4f} \t "
                           f"g_loss {g_loss:.4f} \t "
+                          f"d_lr {d_lr_val:.5f} \t"
+                          f"g_lr {g_lr_val:.5f} \t"
                           # f"memory {memory_percentage:.4f} % \t"
                           f"alpha {alpha.eval():.2f}")
 
@@ -554,11 +588,6 @@ def main(args, config):
                                    + args.mixing_nimg):
                     break
 
-                sess.run(update_alpha)
-                sess.run(ema_op)
-                sess.run(update_d_lr)
-                sess.run(update_g_lr)
-
                 assert alpha.eval() >= 0
 
                 # if verbose:
@@ -571,6 +600,11 @@ def main(args, config):
 
             while True:
                 start = time.time()
+
+                # Update learning rate
+                d_lr_val = sess.run(update_d_lr)
+                g_lr_val = sess.run(update_g_lr)
+
                 assert alpha.eval() == 0
                 if global_step % args.checkpoint_every_nsteps == 0 < (batch_size*global_size) and local_step > 0:
 
@@ -611,15 +645,19 @@ def main(args, config):
                 end = time.time()
                 local_img_s = batch_size / (end - start)
                 img_s = global_size * local_img_s
+
+                sess.run(ema_op)
+                in_phase_step = sess.run(update_intra_phase_step)
+
                 if verbose:
 
                     if large_summary_bool:
-                        print('Writing large summary')
+                        print('Writing large summary...')
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]), global_step)
                         writer.add_summary(summary_s, global_step)
                         writer.add_summary(summary_l, global_step)
                     elif small_summary_bool:
-                        print('Writing small summary')
+                        print('Writing small summary...')
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s',
                                                                             simple_value   =img_s)]),
                                         global_step)
@@ -635,15 +673,17 @@ def main(args, config):
                     #                    global_step)
                     current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
                     print(f"{current_time} \t"
-                          f"step {global_step:09} \t"
+                          f"Step {global_step:09} \t"
+                          f"Step(phase) {in_phase_step:09} \t"
                           f"img/s {img_s:.2f} \t "
                           f"img/s/worker {local_img_s:.3f} \t"
                           f"d_loss {d_loss:.4f} \t "
                           f"g_loss {g_loss:.4f} \t "
+                          f"d_lr {d_lr_val:.5f} \t"
+                          f"g_lr {g_lr_val:.5f} \t"
                           # f"memory {memory_percentage:.4f} % \t"
                           f"alpha {alpha.eval():.2f}")
 
-                sess.run(ema_op)
 
                 # if verbose:
                 #     writer.flush()
@@ -821,6 +861,14 @@ if __name__ == '__main__':
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 19)
     parser.add_argument('--g_lr', type=float, default=1e-3)
     parser.add_argument('--d_lr', type=float, default=1e-3)
+    parser.add_argument('--g_lr_increase', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to g_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of g_lr')
+    parser.add_argument('--g_lr_decrease', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from g_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of g_lr')
+    parser.add_argument('--d_lr_increase', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to d_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of d_lr')
+    parser.add_argument('--d_lr_decrease', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from d_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of d_lr')
+    parser.add_argument('--g_lr_rise_niter', type=int, default=0, help='If a learning rate schedule with a gradual increase in the beginning of a phase is defined for the generator, this number defines within how many iterations the maximum is reached.')
+    parser.add_argument('--g_lr_decay_niter', type=int, default=0, help='If a learning rate schedule with a gradual decrease at the end of a phase is defined for the generator, this defines within how many iterations the minimum is reached.')
+    parser.add_argument('--d_lr_rise_niter', type=int, default=0, help='If a learning rate schedule with a gradual increase in the beginning of a phase is defined for the discriminator, this number defines within how many iterations the maximum is reached.')
+    parser.add_argument('--d_lr_decay_niter', type=int, default=0, help='If a learning rate schedule with a gradual decrease at the end of a phase is defined for the discriminator, this defines within how many iterations the minimum is reached.')
     parser.add_argument('--loss_fn', default='logistic', choices=['logistic', 'wgan'])
     parser.add_argument('--gp_weight', type=float, default=1)
     parser.add_argument('--activation', type=str, default='leaky_relu')
@@ -856,10 +904,6 @@ if __name__ == '__main__':
     parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc")
     args = parser.parse_args()
 
-    # if args.coninue_path:
-    #     assert args.load_phase is not None, "Please specify in which phase the weights of the " \
-    #                                         "specified continue_path should be loaded."
-
     if args.horovod:
         hvd.init()
         np.random.seed(args.seed + hvd.rank())
@@ -872,6 +916,33 @@ if __name__ == '__main__':
         np.random.seed(args.seed)
         tf.random.set_random_seed(args.seed)
         random.seed(args.seed)
+
+    if args.horovod:
+        verbose = hvd.rank() == 0
+    else:
+        verbose = True
+
+    # if args.coninue_path:
+    #     assert args.load_phase is not None, "Please specify in which phase the weights of the " \
+    #                                         "specified continue_path should be loaded."
+
+    # Set default for *_rise_niter and *_decay_niter if needed. We can't do this natively with ArgumentParser because it depends on the value of another argument.
+    if args.g_lr_increase and not args.g_lr_rise_niter:
+        args.g_lr_rise_niter = args.mixing_nimg/2
+        if verbose:
+            print(f"Increasing learning rate requested for the generator, but no number of iterations was specified for the increase (g_lr_rise_niter). Defaulting to {args.g_lr_rise_niter}.")
+    if args.g_lr_decrease and not args.g_lr_decay_niter:
+        args.g_lr_decay_niter = args.stabilizing_nimg/2
+        if verbose:
+            print(f"Decreasing learning rate requested for the generator, but no number of iterations was specified for the increase (g_lr_decay_niter). Defaulting to {args.g_lr_decay_niter}.")
+    if args.d_lr_increase and not args.d_lr_rise_niter:
+        args.d_lr_rise_niter = args.mixing_nimg/2
+        if verbose:
+            print(f"Increasing learning rate requested for the discriminator, but no number of iterations was specified for the increase (d_lr_rise_niter). Defaulting to {args.d_lr_rise_niter}.")
+    if args.d_lr_decrease and not args.d_lr_decay_niter:
+        args.d_lr_decay_niter = args.stabilizing_nimg/2
+        if verbose:
+            print(f"Decreasing learning rate requested for the discriminator, but no number of iterations was specified for the increase (d_lr_decay_niter). Defaulting to {args.d_lr_decay_niter}.")
 
     if args.architecture in ('stylegan2'):
         assert args.starting_phase == args.ending_phase
