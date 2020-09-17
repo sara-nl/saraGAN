@@ -30,9 +30,9 @@ def lr_update(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_dec
         # Rather than if-else statements, the way to define a piecewiese function is through tf.cond
 
         # Prepare some variables:
-        a = tf.math.divide(lr_max, 100)
-        b_rise = tf.math.log(tf.math.truediv(100, lr_rise_niter))
-        b_decay = tf.math.log(tf.math.truediv(100, lr_decay_niter))
+        a = tf.cast(tf.math.divide(lr_max, 100), tf.float32)
+        b_rise = tf.cast(tf.math.divide(np.log(100), lr_rise_niter), tf.float32)
+        b_decay = tf.cast(tf.math.divide(np.log(100), lr_decay_niter), tf.float32)
         step_decay_start = tf.subtract(steps_per_phase, lr_decay_niter)
         remaining_steps = tf.subtract(steps_per_phase, intra_phase_step)
 
@@ -40,17 +40,25 @@ def lr_update(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_dec
         def update_increase_lin ():
             return tf.multiply(
                                tf.cast(tf.truediv(intra_phase_step, lr_rise_niter), tf.float32),
-                               lr_max)
+                               lr_max
+                               )
         def update_increase_exp():
-            return tf.multiply(a, tf.math.exp(tf.multiply(b_rise*intra_phase_step)))
+            return tf.multiply(
+                                a,
+                                tf.math.exp(tf.multiply(b_rise, tf.cast(intra_phase_step, tf.float32)))
+                                )
 
         def update_decrease_lin():
-                return tf.multiply(
-                                   tf.cast(tf.truediv(remaining_steps, lr_decay_niter), tf.float32),
-                                   lr_max)
+            return tf.multiply(
+                               tf.cast(tf.truediv(remaining_steps, lr_decay_niter), tf.float32),
+                               lr_max
+                               )
 
         def update_decrease_exp():
-                return tf.multiply(a, tf.math.exp(tf.multiply(b_decay, remaining_steps)))
+            return tf.multiply(
+                                a,
+                                tf.math.exp(tf.multiply(b_decay, tf.cast(remaining_steps, tf.float32)))
+                                )
 
         def no_op():
             return lr_update
