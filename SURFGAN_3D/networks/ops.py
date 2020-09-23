@@ -168,7 +168,9 @@ def num_filters(phase, num_phases, base_shape, base_dim=None, size=None):
         raise ValueError(f"Unknown size: {size}")
     assert len(filter_list) == 8, "Filter lists are built for LIDC-IDRI dataset."
     # filter_list = filter_list[-num_phases:]
-    current_dim = [2 ** (phase - 1) * dim for dim in base_shape]
+    # Take base_shape[1:] to cut of the number of input channels:
+    # We want to determine number of filters based on spatial number of voxels; channels are irrelevant
+    current_dim = [2 ** (phase - 1) * dim for dim in base_shape[1:]]
     print(f"DEBUG: base_shape={base_shape}, phase={phase}, current_dim={current_dim}")
     log_product = np.log2(np.product(current_dim))
     # Filter lists were designed for dimensions where the 2-log is [4, 7, 10, ...]
