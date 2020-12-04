@@ -44,7 +44,10 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
         return x
 
 
-def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim, activation, param=None, is_reuse=False, size='medium'):
+def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim, activation, param=None, is_reuse=False, size='medium', conditioning=None):
+
+    if conditioning is not None:
+        raise NotImplementedError()
 
     with tf.variable_scope('discriminator') as scope:
 

@@ -16,7 +16,11 @@ def generator(z,
               param=None,
               truncation_psi=None, truncation_layers=8, beta=0.995, style_mixing_prob=0.9,
               size='medium',
-              is_reuse=False):
+              is_reuse=False,
+	      conditioning=None):
+
+    if conditioning is not None:
+        raise NotImplementedError()
 
     with tf.variable_scope('generator') as scope:
         if is_reuse:
