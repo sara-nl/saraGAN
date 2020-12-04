@@ -27,6 +27,7 @@ import warnings
 from skimage.transform import resize
 
 
+
 class InvalidFIDException(Exception):
     pass
 
@@ -292,16 +293,27 @@ def check_or_download_inception(inception_path):
         the file if it is not present. '''
     INCEPTION_URL = 'http://download.tensorflow.org/models/image/imagenet/inception-2015-12-05.tgz'
     if inception_path is None:
-        inception_path = '/tmp'
+        inception_path = os.getenv('TMPDIR', '/tmp')
     inception_path = pathlib.Path(inception_path)
     model_file = inception_path / 'classify_image_graph_def.pb'
+    # print("Checking if %s exists..." % model_file)
     if not model_file.exists():
+        # If using multiple MPI ranks, each will download its own inception model.
+        # To avoid clashes with multiple ranks, we write in a tempdir.
+        # This is inefficient, since we'll download and store one copy of the inception model per rank, but it is fool-proof.
+        import tempfile
+        dirpath = tempfile.mkdtemp(dir=str(inception_path))
+        download_filename = pathlib.Path(dirpath) / 'inception-2015-12-05.tgz'
+        model_file = pathlib.Path(dirpath) / 'classify_image_graph_def.pb'
         print("Downloading Inception model")
         from urllib import request
         import tarfile
-        fn, _ = request.urlretrieve(INCEPTION_URL)
+        fn, _ = request.urlretrieve(INCEPTION_URL, filename=str(download_filename))
         with tarfile.open(fn, mode='r') as f:
             f.extract('classify_image_graph_def.pb', str(model_file.parent))
+        model_file = pathlib.Path(dirpath) / 'classify_image_graph_def.pb'
+
+    # print("DEBUG: using inception model path: %s" % str(model_file))
     return str(model_file)
 
 
@@ -315,26 +327,52 @@ def calculate_fid_given_volumes(volume_real, volume_fake, inception_path, sess):
     return fid_value
 
 
-def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, sess, inception_path='', data_format='NCDHW'):
+def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, sess, inception_path=None, data_format='NCDHW'):
+
+    # FID calculation only makes sense if the tensors for fakes and real have the same shape
+    if volumes_batch_real.shape != volumes_batch_fake.shape:
+        raise Exception("ERROR: unequal shape for batches of real images (%s) and fake images (%s)" % (volumes_batch_real.shape, volumes_batch_fake.shape))
+
+    if volumes_batch_real.ndim != 5 or volumes_batch_fake.ndim != 5:
+
+        # For some reason, our real images enter without a channel dimension
+        #if volumes_batch_real.ndim == 4:
+        #    print("WARNING: volumes_batch_real.shape = %s, expanding dimensions at axis 1" % volumes_batch_real.shape)
+        #    volumes_batch_real = np.expand_dims(volumes_batch_real, 1)
+            
+        raise Exception("ERROR: either volumes_batch_real.ndim (%s) or volumes_batch_fake.ndim (%s) is not equal to 5." % (volumes_batch_real.ndim,  volumes_batch_fake.ndim))
 
     if data_format == 'NCDHW':
 
         volumes_batch_real = np.transpose(volumes_batch_real, [0, 2, 3, 4, 1])
         volumes_batch_fake = np.transpose(volumes_batch_fake, [0, 2, 3, 4, 1])
 
+    # If the image has only 1 channel (typically greyscale), repeat three times, since inception assumes RGB input.
     if volumes_batch_real.shape[-1] == 1:
         volumes_batch_real = np.repeat(volumes_batch_real, 3, axis=-1)
         volumes_batch_fake = np.repeat(volumes_batch_fake, 3, axis=-1)
 
-    inception_path = check_or_download_inception(inception_path)
-    create_inception_graph(str(inception_path))
+    # Only the first time this function is called should it load the inception graph. Thus, check if it happens to exist already:
+    try:
+        layername = 'FID_Inception_Net/pool_3:0'
+        sess.graph.get_tensor_by_name(layername)
+    except:
+        inception_path = check_or_download_inception(inception_path)
+        create_inception_graph(str(inception_path))
 
+    # Setting batch_size for FID calculation. 
+    # In this context, batch_size is the number of z-slices to be processed in a single batch (i.e. NOT the number of 3D samples)
+    batch_size = 64
+    if volumes_batch_fake.shape[1] < 64:
+        print("Warning: batch_size for FID calculation (%s) is bigger than the number of z-slices per sample (%s). Setting batch size equal to number of z-slices per sample" % ( batch_size, volumes_batch_fake.shape[1]))
+        batch_size = volumes_batch_fake.shape[1]
+    
     activations_real = []
     activations_fake = []
     for i in range(len(volumes_batch_fake)):
-
-        act_real = get_activations_from_volume(volumes_batch_real[i], sess)
-        act_fake = get_activations_from_volume(volumes_batch_fake[i], sess)
+        # print("DEBUG: Getting activations for volumes %i" % i)
+        act_real = get_activations_from_volume(volumes_batch_real[i], sess, batch_size = batch_size)
+        act_fake = get_activations_from_volume(volumes_batch_fake[i], sess, batch_size = batch_size)
 
         activations_real.append(act_real)
         activations_fake.append(act_fake)
@@ -345,14 +383,37 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
     fids = []
 
     for i in range(activations_real.shape[1]):
+        #print("DEBUG: Computing frechet distance for activation at depth layer %i out of %i" % (i, activations_real.shape[1]))
 
-        m1 = activations_real[:, i, ...].mean(axis=0)
-        m2 = activations_fake[:, i, ...].mean(axis=0)
+        # Use freched_classifier_distance from https://github.com/tsc2017/Frechet-Inception-Distance/blob/master/TF1/fid_tpu_tf1.py
+        # This uses tensorflow_gan's tfgan.eval.frechec_classifier_distance_from_activations (https://github.com/tensorflow/gan)
+        # Since this is in a for loop AND in a function that gets called many times during training,
+        # we first try to get the tensors from the default_graph to see if they already exist.
+        # If not, they are created. That should only happen the very first time the FID is computed.
+        try:
+            activations1 = tf.get_default_graph().get_tensor_by_name("activations1:0")
+            activations2 = tf.get_default_graph().get_tensor_by_name("activations2:0")
+            fcd = tf.get_default_graph().get_tensor_by_name("fid_from_activations:0")
+        except:
+            import tensorflow_gan as tfgan
+            activations1 = tf.compat.v1.placeholder(tf.float32, [None, None], name = 'activations1')
+            activations2 = tf.compat.v1.placeholder(tf.float32, [None, None], name = 'activations2')
+            fcd = tfgan.eval.frechet_classifier_distance_from_activations(activations1, activations2)
+            fcd = tf.identity(fcd, name = 'fid_from_activations')
+        
+        #import tensorflow_gan as tfgan
+        #fcd = tfgan.eval.frechet_classifier_distance_from_activations(activations_real[:, i, ...], activations_fake[:, i, ...])
+        fid = sess.run(fcd, feed_dict = {activations1: activations_real[:, i, ...], activations2: activations_fake[:, i, ...]})
+        
+        # m1 = activations_real[:, i, ...].mean(axis=0)
+        # m2 = activations_fake[:, i, ...].mean(axis=0)
 
-        sigma1 = np.cov(activations_real[:, i, ...], rowvar=False)
-        sigma2 = np.cov(activations_fake[:, i, ...], rowvar=False)
+        # sigma1 = np.cov(activations_real[:, i, ...], rowvar=False)
+        # sigma2 = np.cov(activations_fake[:, i, ...], rowvar=False)
 
-        fid = calculate_frechet_distance(m1, sigma1, m2, sigma2)
+        # fid = calculate_frechet_distance(m1, sigma1, m2, sigma2)
+
+        # print("Computed FID using old function: %s" % fid)
 
         fids.append(fid)
 
