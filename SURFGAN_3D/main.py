@@ -5,8 +5,7 @@ import tensorflow as tf
 import horovod.tensorflow as hvd
 import time
 import random
-from metrics import (calculate_fid_given_batch_volumes, get_swd_for_volumes,
-                     get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
+
 from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
 # from mpi4py import MPI
@@ -19,6 +18,8 @@ from networks.ops import num_filters
 from tensorflow.data.experimental import AUTOTUNE
 import nvgpu
 import logging
+
+from metrics.save_metrics import save_metrics
 
 # For TensorBoard Debugger:
 from tensorflow.python import debug as tf_debug
@@ -53,8 +54,8 @@ def main(args, config):
         print(f"Saving files to {logdir}")
 
     else:
-        pass
-        # writer = None
+        writer = None
+        #pass
 
     # Get starting & final resolutions
     start_shape = parse_tuple(args.start_shape)
@@ -72,13 +73,17 @@ def main(args, config):
     # Number of filters at the base of the progressive network
     # In other words: at the starting resolution, this is the amount of filters that will be used
     # In subsequent phases, the number of filters will go down as the resolution goes up.
-    base_dim = num_filters(1, num_phases, base_shape = base_shape, size=args.network_size)
+#base_dim = num_filters(1, num_phases, base_shape = base_shape, size=args.network_size)
+    # TODO: DON'T HARDCODE BASEDIM (testing for now...)
+    # With more than 256 filters, the dense connection between the latent space and first filters has too many parameters if you start with e.g. a latent vector of 16x16x10=2560 elements
+    base_dim=128
 
     if verbose:
         print(f"Start resolution: {start_resolution}")
         print(f"Final resolution: {final_resolution}")
         print(f"Deduced number of phases: {num_phases}")
         print(f"base_dim: {base_dim}")
+        print(f"WARNING: base_dim hardcoded! Should be changed into e.g. an argument")
 
     var_list = list()
     global_step = 0
@@ -108,6 +113,16 @@ def main(args, config):
             assert batch_size * global_size <= args.max_global_batch_size
             if verbose:
                 print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")
+
+        # Num_metric_samples is the amount of samples the metric is calculated on.
+        # If it is not set explicitely, we use the same as the global batch size, but never less than 2 per worker (1 per worker potentially makes some metrics crash)
+        if not args.num_metric_samples:
+            if batch_size > 1:
+                num_metric_samples = batch_size * global_size
+            else:
+                num_metric_samples = 2 * global_size
+        else:
+            num_metric_samples = args.num_metric_samples
 
         # if args.horovod:
         #     dataset.shard(hvd.size(), hvd.rank())
@@ -513,11 +528,12 @@ def main(args, config):
                 #sess = tf_debug.TensorBoardDebugWrapperSession(sess, 'localhost:6789')
                 small_summary_bool = (local_step % args.summary_small_every_nsteps == 0)
                 large_summary_bool = (local_step % args.summary_large_every_nsteps == 0)
-                if small_summary_bool:
+                metrics_summary_bool = (local_step % args.metrics_every_nsteps == 0)
+                if large_summary_bool:
                     _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, summary_small, summary_large,
                           disc_loss, gen_loss], feed_dict={real_image_input: batch})
-                elif large_summary_bool:
+                elif small_summary_bool:
                     _, _, summary_s, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, summary_small,
                           disc_loss, gen_loss], feed_dict={real_image_input: batch})
@@ -537,8 +553,13 @@ def main(args, config):
                 sess.run(ema_op)
                 in_phase_step = sess.run(update_intra_phase_step)
 
-                if verbose:
+                if metrics_summary_bool:
+                    if args.calc_metrics:
+                        if verbose:
+                            print('Computing and writing metrics...')
+                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, compute_metrics, num_metric_samples, verbose)
 
+                if verbose:
                     if large_summary_bool:
                         print('Writing large summary...')
                         writer.add_summary(summary_s, global_step)
@@ -622,6 +643,7 @@ def main(args, config):
 
                 small_summary_bool = (local_step % args.summary_small_every_nsteps == 0)
                 large_summary_bool = (local_step % args.summary_large_every_nsteps == 0)
+                metrics_summary_bool = (local_step % args.metrics_every_nsteps == 0)
                 if large_summary_bool:
                     _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
                         [train_gen, train_disc, summary_small, summary_large,
@@ -648,6 +670,11 @@ def main(args, config):
 
                 sess.run(ema_op)
                 in_phase_step = sess.run(update_intra_phase_step)
+
+                if metrics_summary_bool:
+                    if args.calc_metrics:
+                        print('Computing and writing metrics')
+                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, compute_metrics, num_metric_samples, verbose)
 
                 if verbose:
 
@@ -709,125 +736,7 @@ def main(args, config):
 
                     break
 
-            # # Calculate metrics.
-            # calc_swds: bool = size >= 16
-            # calc_ssims: bool = min(npy_data.shape[1:]) >= 16
-            #
-            # if args.calc_metrics:
-            #     fids_local = []
-            #     swds_local = []
-            #     psnrs_local = []
-            #     mses_local = []
-            #     nrmses_local = []
-            #     ssims_local = []
-            #
-            #     counter = 0
-            #     while True:
-            #         if args.horovod:
-            #             start_loc = counter + hvd.rank() * batch_size
-            #         else:
-            #             start_loc = 0
-            #         real_batch = np.stack([npy_data[i] for i in range(start_loc, start_loc + batch_size)])
-            #         real_batch = real_batch.astype(np.int16) - 1024
-            #         fake_batch = sess.run(gen_sample).astype(np.float32)
-            #
-            #         # Turn fake batch into HUs and clip to training range.
-            #         fake_batch = (np.clip(fake_batch, -1, 2) * 1024).astype(np.int16)
-            #
-            #         if verbose:
-            #             print('real min, max', real_batch.min(), real_batch.max())
-            #             print('fake min, max', fake_batch.min(), fake_batch.max())
-            #
-            #         fids_local.append(calculate_fid_given_batch_volumes(real_batch, fake_batch, sess))
-            #
-            #         if calc_swds:
-            #             swds = get_swd_for_volumes(real_batch, fake_batch)
-            #             swds_local.append(swds)
-            #
-            #         psnr = get_psnr(real_batch, fake_batch)
-            #         if calc_ssims:
-            #             ssim = get_ssim(real_batch, fake_batch)
-            #             ssims_local.append(ssim)
-            #         mse = get_mean_squared_error(real_batch, fake_batch)
-            #         nrmse = get_normalized_root_mse(real_batch, fake_batch)
-            #
-            #         psnrs_local.append(psnr)
-            #         mses_local.append(mse)
-            #         nrmses_local.append(nrmse)
-            #
-            #         if args.horovod:
-            #             counter = counter + global_size * batch_size
-            #         else:
-            #             counter += batch_size
-            #
-            #         if counter >= args.num_metric_samples:
-            #             break
-            #
-            #     fid_local = np.mean(fids_local)
-            #     psnr_local = np.mean(psnrs_local)
-            #     ssim_local = np.mean(ssims_local)
-            #     mse_local = np.mean(mses_local)
-            #     nrmse_local = np.mean(nrmses_local)
-            #
-            #     if args.horovod:
-            #         fid = MPI.COMM_WORLD.allreduce(fid_local, op=MPI.SUM) / hvd.size()
-            #         psnr = MPI.COMM_WORLD.allreduce(psnr_local, op=MPI.SUM) / hvd.size()
-            #         mse = MPI.COMM_WORLD.allreduce(mse_local, op=MPI.SUM) / hvd.size()
-            #         nrmse = MPI.COMM_WORLD.allreduce(nrmse_local, op=MPI.SUM) / hvd.size()
-            #         if calc_ssims:
-            #             ssim = MPI.COMM_WORLD.allreduce(ssim_local, op=MPI.SUM) / hvd.size()
-            #     else:
-            #         fid = fid_local
-            #         psnr = psnr_local
-            #         ssim = ssim_local
-            #         mse = mse_local
-            #         nrmse = nrmse_local
-            #
-            #     if calc_swds:
-            #         swds_local = np.array(swds_local)
-            #         # Average over batches
-            #         swds_local = swds_local.mean(axis=0)
-            #         if args.horovod:
-            #             swds = MPI.COMM_WORLD.allreduce(swds_local, op=MPI.SUM) / hvd.size()
-            #         else:
-            #             swds = swds_local
-            #
-            #     if verbose:
-            #         print(f"FID: {fid:.4f}")
-            #         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='fid',
-            #                                                               simple_value=fid)]),
-            #                            global_step)
-            #
-            #         print(f"PSNR: {psnr:.4f}")
-            #         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='psnr',
-            #                                                               simple_value=psnr)]),
-            #                            global_step)
-            #
-            #         print(f"MSE: {mse:.4f}")
-            #         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='mse',
-            #                                                               simple_value=mse)]),
-            #                            global_step)
-            #
-            #         print(f"Normalized Root MSE: {nrmse:.4f}")
-            #         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='nrmse',
-            #                                                               simple_value=nrmse)]),
-            #                            global_step)
-            #
-            #         if calc_swds:
-            #             print(f"SWDS: {swds}")
-            #             for i in range(len(swds))[:-1]:
-            #                 lod = 16 * 2 ** i
-            #                 writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_{lod}',
-            #                                                                       simple_value=swds[
-            #                                                                           i])]),
-            #                                    global_step)
-            #             writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'swd_mean',
-            #                                                                   simple_value=swds[
-            #                                                                       -1])]), global_step)
-            #         if calc_ssims:
-            #             print(f"SSIM: {ssim}")
-            #             writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag=f'ssim',
-            #                                                                   simple_value=ssim)]), global_step)
+            
 
             if verbose:
                 print("\n\n\n End of phase.")
@@ -880,7 +789,7 @@ if __name__ == '__main__':
                         type=float, help='generator annealing rate, 1 -> no annealing.')
     parser.add_argument('--d_annealing', default=1,
                         type=float, help='discriminator annealing rate, 1 -> no annealing.')
-    parser.add_argument('--num_metric_samples', type=int, default=512)
+    parser.add_argument('--num_metric_samples', type=int, default=None)
     parser.add_argument('--beta1', type=float, default=0)
     parser.add_argument('--beta2', type=float, default=0.9)
     parser.add_argument('--ema_beta', type=float, default=0.99)
@@ -898,8 +807,15 @@ if __name__ == '__main__':
     parser.add_argument('--g_clipping', default=False, type=bool)
     parser.add_argument('--d_clipping', default=False, type=bool)
     parser.add_argument('--summary_small_every_nsteps', default=32, type=int, help="Summaries are saved every time the locally processsed image counter is a multiple of this number")
-    parser.add_argument('--summary_large_every_nsteps', default=1000, type=int, help="Large summaries such as images are saved every time the locally processed image counter is a multiple of this number")
+    parser.add_argument('--summary_large_every_nsteps', default=64, type=int, help="Large summaries such as images are saved every time the locally processed image counter is a multiple of this number")
+    parser.add_argument('--metrics_every_nsteps', default=128, type=int, help="Metrics are computed every time the locally processed image counter is a multiple of this number")
     # parser.add_argument('--load_phase', default=None, type=int)
+    parser.add_argument('--compute_FID', default=False, action='store_true', help="Whether to compute the Frechet Inception Distance (frequency determined by metrics_every_nsteps)")
+    parser.add_argument('--compute_swds', default=False, action='store_true', help="Whether to compute the Sliced Wasserstein Distance (frequency determined by metrics_every_nsteps)")
+    parser.add_argument('--compute_ssims', default=False, action='store_true', help="Whether to compute the Structural Similarity (frequency determined by metrics_every_nsteps)")
+    parser.add_argument('--compute_psnrs', default=False, action='store_true', help="Whether to compute the peak signal to noise ratio (frequency determined by metrics_every_nsteps). Not very meaningfull for GANs...")
+    parser.add_argument('--compute_mses', default=False, action='store_true', help="Whether to compute the mean squared error (frequency determined by metrics_every_nsteps). Not very meaningfull for GANs...")
+    parser.add_argument('--compute_nrmses', default=False, action='store_true', help="Whether to compute the normalized mean squared error (frequency determined by metrics_every_nsteps). Not very meaningfull for GANs...")
     parser.add_argument('--checkpoint_every_nsteps', default=20000, type=int, help="Checkpoint files are saved every time the globally processed image counter is (approximately) a multiple of this number. Technically, the counter needs to satisfy: counter % checkpoint_every_nsteps < global_batch_size.")
     parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc")
     args = parser.parse_args()
@@ -922,25 +838,35 @@ if __name__ == '__main__':
     else:
         verbose = True
 
+    # Create dictionary of metrics to compute
+    compute_metrics = {
+        'compute_FID': args.compute_FID,
+        'compute_swds': args.compute_swds,
+        'compute_ssims': args.compute_ssims,
+        'compute_psnrs': args.compute_psnrs,
+        'compute_mses': args.compute_mses,
+        'compute_nrmses': args.compute_nrmses,
+    }
+
     # if args.coninue_path:
     #     assert args.load_phase is not None, "Please specify in which phase the weights of the " \
     #                                         "specified continue_path should be loaded."
 
     # Set default for *_rise_niter and *_decay_niter if needed. We can't do this natively with ArgumentParser because it depends on the value of another argument.
     if args.g_lr_increase and not args.g_lr_rise_niter:
-        args.g_lr_rise_niter = args.mixing_nimg/2
+        args.g_lr_rise_niter = int(args.mixing_nimg/2)
         if verbose:
             print(f"Increasing learning rate requested for the generator, but no number of iterations was specified for the increase (g_lr_rise_niter). Defaulting to {args.g_lr_rise_niter}.")
     if args.g_lr_decrease and not args.g_lr_decay_niter:
-        args.g_lr_decay_niter = args.stabilizing_nimg/2
+        args.g_lr_decay_niter = int(args.stabilizing_nimg/2)
         if verbose:
             print(f"Decreasing learning rate requested for the generator, but no number of iterations was specified for the increase (g_lr_decay_niter). Defaulting to {args.g_lr_decay_niter}.")
     if args.d_lr_increase and not args.d_lr_rise_niter:
-        args.d_lr_rise_niter = args.mixing_nimg/2
+        args.d_lr_rise_niter = int(args.mixing_nimg/2)
         if verbose:
             print(f"Increasing learning rate requested for the discriminator, but no number of iterations was specified for the increase (d_lr_rise_niter). Defaulting to {args.d_lr_rise_niter}.")
     if args.d_lr_decrease and not args.d_lr_decay_niter:
-        args.d_lr_decay_niter = args.stabilizing_nimg/2
+        args.d_lr_decay_niter = int(args.stabilizing_nimg/2)
         if verbose:
             print(f"Decreasing learning rate requested for the discriminator, but no number of iterations was specified for the increase (d_lr_decay_niter). Defaulting to {args.d_lr_decay_niter}.")
 

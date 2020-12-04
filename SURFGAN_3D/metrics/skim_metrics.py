@@ -1,5 +1,6 @@
 from skimage.metrics import mean_squared_error, normalized_root_mse, peak_signal_noise_ratio, structural_similarity
 import numpy as np
+import itertools
 
 
 def get_mean_squared_error(real, fake):
@@ -21,7 +22,11 @@ def get_ssim(real, fake, data_range=3):
         real = real[0, ...]
     if fake.shape[0] == 1:
         fake = fake[0, ...]
-    return structural_similarity(real, fake, data_range=data_range, multichannel=True, gaussian_weights=True)
+    ssims = []
+    for (im1, im2) in zip(real,fake):
+        ssims.append(structural_similarity(im1, im2, data_range=data_range, multichannel=True, gaussian_weights=True))
+    np.mean(ssims)
+    return ssims
 
 
 if __name__ == '__main__':
