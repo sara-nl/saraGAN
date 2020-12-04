@@ -24,7 +24,9 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
         # x = minibatch_stddev_layer(x)
         shape = x.get_shape().as_list()[2:]
         kernel = [k(s) for s in shape]
-        x = conv3d(x, filters_out, kernel, activation=activation, param=param)
+#        x = conv3d(x, filters_out, kernel, activation=activation, param=param)
+        # base_dim = num_filters for the first generator layer after the latent space. Discriminator should mirror that.
+        x = conv3d(x, base_dim, kernel, activation=activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         with tf.variable_scope('dense_1'):
