@@ -5,6 +5,7 @@ import tensorflow as tf
 import horovod.tensorflow as hvd
 import time
 import random
+import optuna
 
 from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
@@ -24,7 +25,25 @@ from metrics.save_metrics import save_metrics
 # For TensorBoard Debugger:
 from tensorflow.python import debug as tf_debug
 
+
+
 def main(args, config):
+
+    study = optuna.create_study(direction = "minimize")    
+    study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = 100)
+
+    print("Number of finished trials: ", len(study.trials))
+    print("Best trial:")
+    trial = study.best_trial
+    print(" Value: ", trial.value)
+    print(" Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))
+
+def optuna_objective(trial, args, config):
+
+    # Store the last fid so that it can be returned to optuna
+    last_fid = None
 
     if args.horovod:
         verbose = hvd.rank() == 0
@@ -171,8 +190,11 @@ def main(args, config):
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
 
-        g_lr = args.g_lr
-        d_lr = args.d_lr
+        # Use optuna for LR
+        # g_lr = args.g_lr
+        # d_lr = args.d_lr
+        g_lr = trial.suggest_loguniform('generator_LR', 1e-6, 1e-2)
+        d_lr = trial.suggest_loguniform('discriminator_LR', 1e-6, 1e-2)
 
         if args.horovod:
             if args.g_scaling == 'sqrt':
@@ -559,6 +581,12 @@ def main(args, config):
                             print('Computing and writing metrics...')
                         metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, compute_metrics, num_metric_samples, verbose)
 
+                        # Optuna pruning and return value:
+                        last_fid = metrics['FID']
+                        trial.report(metrics['FID'], global_step)
+                        if trial.should_prune():
+                            raise optuna.TrialPruned()
+
                 if verbose:
                     if large_summary_bool:
                         print('Writing large summary...')
@@ -676,6 +704,12 @@ def main(args, config):
                         print('Computing and writing metrics')
                         metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, compute_metrics, num_metric_samples, verbose)
 
+                        # Optuna pruning and return value:
+                        last_fid = metrics['FID']
+                        trial.report(metrics['FID'], global_step)
+                        if trial.should_prune():
+                            raise optuna.TrialPruned()
+
                 if verbose:
 
                     if large_summary_bool:
@@ -751,6 +785,8 @@ def main(args, config):
                 if phase == args.ending_phase:
                     print("Reached final phase, breaking.")
                     break
+
+    return last_fid
 
 
 if __name__ == '__main__':
