@@ -110,6 +110,15 @@ def optuna_objective(trial, args, config):
     for phase in range(1, num_phases + 1):
 
         tf.reset_default_graph()
+        # Random seeds need to be reinitialized after a reset_default_graph (at least for TF, but I guess resetting all is good)
+        if args.horovod:
+            np.random.seed(args.seed + hvd.rank())
+            tf.random.set_random_seed(args.seed + hvd.rank())
+            random.seed(args.seed + hvd.rank())
+        else:
+            np.random.seed(args.seed)
+            tf.random.set_random_seed(args.seed)
+            random.seed(args.seed)
 
         # ------------------------------------------------------------------------------------------#
         # DATASET
