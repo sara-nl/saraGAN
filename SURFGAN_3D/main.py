@@ -52,14 +52,17 @@ def main(args, config):
         # Then, make all other workers load the study
         if hvd.rank() != 0:
             study = optuna.load_study(study_name = study_name, storage = storage_sqlite)
+
+        ntrials = np.ceil(100/hvd.size())
     else:
         # No horovod, so don't use SQlite, but just the default storage
         study = optuna.create_study(direction = "minimize", study_name = study_name)
+        ntrials = 100
 
     # See how much output we can get...
     optuna.logging.set_verbosity(optuna.logging.DEBUG)
 
-    study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = 100)
+    study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials)
 
     print("Number of finished trials: ", len(study.trials))
     print("Best trial:")
@@ -228,11 +231,57 @@ def optuna_objective(trial, args, config):
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
 
-        # Use optuna for LR
-        # g_lr = args.g_lr
-        # d_lr = args.d_lr
-        g_lr = trial.suggest_loguniform('generator_LR', 1e-6, 1e-2)
-        d_lr = trial.suggest_loguniform('discriminator_LR', 1e-6, 1e-2)
+        # Use optuna for LR, overwrite original args
+        args.g_lr = trial.suggest_loguniform('generator_LR', 1e-6, 1e-2)
+        args.d_lr = trial.suggest_loguniform('discriminator_LR', 1e-6, 1e-2)
+
+        # Use optuna for LR schedules. Predefine some schedules, as not all make sense
+        lr_schedule = [
+            {'lr_sched': None, 'lr_fract': 0.5},
+            {'lr_sched': 'linear', 'lr_fract': 0.125},
+            {'lr_sched': 'linear', 'lr_fract': 0.25},
+            {'lr_sched': 'linear', 'lr_fract': 0.375},
+            {'lr_sched': 'linear', 'lr_fract': 0.5},
+            {'lr_sched': 'exponential', 'lr_fract': 0.125},
+            {'lr_sched': 'exponential', 'lr_fract': 0.25},
+            {'lr_sched': 'exponential', 'lr_fract': 0.375},
+            {'lr_sched': 'exponential', 'lr_fract': 0.5},
+        ]
+
+        # d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', lr_schedule)
+        # d_lr_sched_dec = trial.suggest_categorical('d_lr_sched_dec', lr_schedule)
+        # g_lr_sched_inc = trial.suggest_categorical('g_lr_sched_inc', lr_schedule)
+        # g_lr_sched_dec = trial.suggest_categorical('g_lr_sched_dec', lr_schedule)
+
+        # args.g_lr_increase = lr_schedule[g_lr_sched_inc]['lr_sched']
+        # args.g_lr_decrease = lr_schedule[g_lr_sched_dec]['lr_sched']
+        # args.d_lr_increase = lr_schedule[d_lr_sched_inc]['lr_sched']
+        # args.d_lr_decrease = lr_schedule[d_lr_sched_dec]['lr_sched']
+
+        # args.g_lr_rise_niter = np.ceil(lr_schedule[g_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
+        # args.g_lr_dec_niter = np.ceil(lr_schedule[g_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
+        # args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
+        # args.d_lr_dec_niter = np.ceil(lr_schedule[d_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
+
+        d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
+        d_lr_sched_dec = trial.suggest_categorical('d_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
+        g_lr_sched_inc = trial.suggest_categorical('g_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
+        g_lr_sched_dec = trial.suggest_categorical('g_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
+
+        args.g_lr_increase = lr_schedule[g_lr_sched_inc]['lr_sched']
+        args.g_lr_decrease = lr_schedule[g_lr_sched_dec]['lr_sched']
+        args.d_lr_increase = lr_schedule[d_lr_sched_inc]['lr_sched']
+        args.d_lr_decrease = lr_schedule[d_lr_sched_dec]['lr_sched']
+
+        args.g_lr_rise_niter = np.ceil(lr_schedule[g_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
+        args.g_lr_dec_niter = np.ceil(lr_schedule[g_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
+        args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
+        args.d_lr_dec_niter = np.ceil(lr_schedule[d_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
+
+
+        g_lr = args.g_lr
+        d_lr = args.d_lr
+        
 
         if args.horovod:
             if args.g_scaling == 'sqrt':
@@ -269,12 +318,12 @@ def optuna_objective(trial, args, config):
         update_intra_phase_step = intra_phase_step.assign_add(batch_size*global_size)
 
         # Turn arguments into constant Tensors
-        g_lr_max = tf.constant(args.g_lr, tf.float32)
+        g_lr_max = tf.constant(args.d_lr, tf.float32)
         d_lr_max = tf.constant(args.g_lr, tf.float32)
-        g_lr_rise_niter = tf.constant(args.g_lr_rise_niter)
-        d_lr_rise_niter = tf.constant(args.d_lr_rise_niter)
-        g_lr_decay_niter = tf.constant(args.g_lr_decay_niter)
-        d_lr_decay_niter = tf.constant(args.d_lr_decay_niter)
+#        g_lr_rise_niter = tf.constant(args.g_lr_rise_niter)
+#        d_lr_rise_niter = tf.constant(args.d_lr_rise_niter)
+#        g_lr_decay_niter = tf.constant(args.g_lr_decay_niter)
+#        d_lr_decay_niter = tf.constant(args.d_lr_decay_niter)
         steps_per_phase = tf.constant(args.mixing_nimg + args.stabilizing_nimg)
 
 #        with tf.control_dependencies([update_intra_phase_step]):
