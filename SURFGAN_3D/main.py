@@ -9,7 +9,7 @@ import optuna
 
 from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
-# from mpi4py import MPI
+from mpi4py import MPI
 import os
 import importlib
 from rectified_adam import RAdamOptimizer
@@ -29,7 +29,36 @@ from tensorflow.python import debug as tf_debug
 
 def main(args, config):
 
-    study = optuna.create_study(direction = "minimize")    
+    timestamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+    study_name = f"optuna_{timestamp}"
+
+    storage_sqlite=f'sqlite:///optuna_{timestamp}.db'
+    if args.logdir is not None:
+        storage_sqlite=f'sqlite:///{args.logdir}/optuna.db'
+    
+
+
+    # If you want to run optuna in distributed fashion, through an mpirun...
+    if args.optuna_distributed:
+        # Only worker with rank 0 should create a study:
+        study = None
+        if hvd.rank() == 0:
+            print("Storing SQlite database for optuna at %s" %storage_sqlite)
+            study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite)
+    
+        # Call a barrier to make sure the study has been created before the other workers load it
+        MPI.COMM_WORLD.Barrier()
+
+        # Then, make all other workers load the study
+        if hvd.rank() != 0:
+            study = optuna.load_study(study_name = study_name, storage = storage_sqlite)
+    else:
+        # No horovod, so don't use SQlite, but just the default storage
+        study = optuna.create_study(direction = "minimize", study_name = study_name)
+
+    # See how much output we can get...
+    optuna.logging.set_verbosity(optuna.logging.DEBUG)
+
     study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = 100)
 
     print("Number of finished trials: ", len(study.trials))
@@ -586,12 +615,13 @@ def optuna_objective(trial, args, config):
 
                 if metrics_summary_bool:
                     if args.calc_metrics:
-                        if verbose:
-                            print('Computing and writing metrics...')
+                        # if verbose:
+                            # print('Computing and writing metrics...')
                         metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, compute_metrics, num_metric_samples, verbose)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
+                        print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
                         trial.report(metrics['FID'], global_step)
                         if trial.should_prune():
                             raise optuna.TrialPruned()
@@ -616,17 +646,17 @@ def optuna_objective(trial, args, config):
                     # writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
                     #                    global_step)
                     current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
-                    print(f"{current_time} \t"
-                          f"Step {global_step:09} \t"
-                          f"Step(phase) {in_phase_step:09} \t"
-                          f"img/s {img_s:.2f} \t "
-                          f"img/s/worker {local_img_s:.3f} \t"
-                          f"d_loss {d_loss:.4f} \t "
-                          f"g_loss {g_loss:.4f} \t "
-                          f"d_lr {d_lr_val:.5f} \t"
-                          f"g_lr {g_lr_val:.5f} \t"
-                          # f"memory {memory_percentage:.4f} % \t"
-                          f"alpha {alpha.eval():.2f}")
+                    # print(f"{current_time} \t"
+                    #       f"Step {global_step:09} \t"
+                    #       f"Step(phase) {in_phase_step:09} \t"
+                    #       f"img/s {img_s:.2f} \t "
+                    #       f"img/s/worker {local_img_s:.3f} \t"
+                    #       f"d_loss {d_loss:.4f} \t "
+                    #       f"g_loss {g_loss:.4f} \t "
+                    #       f"d_lr {d_lr_val:.5f} \t"
+                    #       f"g_lr {g_lr_val:.5f} \t"
+                    #       # f"memory {memory_percentage:.4f} % \t"
+                    #       f"alpha {alpha.eval():.2f}")
 
                 #     # if take_first_snapshot:
                 #     #     import tracemalloc
@@ -710,11 +740,12 @@ def optuna_objective(trial, args, config):
 
                 if metrics_summary_bool:
                     if args.calc_metrics:
-                        print('Computing and writing metrics')
+                        # print('Computing and writing metrics')
                         metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, compute_metrics, num_metric_samples, verbose)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
+                        print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
                         trial.report(metrics['FID'], global_step)
                         if trial.should_prune():
                             raise optuna.TrialPruned()
@@ -742,17 +773,17 @@ def optuna_objective(trial, args, config):
                     # writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
                     #                    global_step)
                     current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
-                    print(f"{current_time} \t"
-                          f"Step {global_step:09} \t"
-                          f"Step(phase) {in_phase_step:09} \t"
-                          f"img/s {img_s:.2f} \t "
-                          f"img/s/worker {local_img_s:.3f} \t"
-                          f"d_loss {d_loss:.4f} \t "
-                          f"g_loss {g_loss:.4f} \t "
-                          f"d_lr {d_lr_val:.5f} \t"
-                          f"g_lr {g_lr_val:.5f} \t"
-                          # f"memory {memory_percentage:.4f} % \t"
-                          f"alpha {alpha.eval():.2f}")
+                    # print(f"{current_time} \t"
+                    #       f"Step {global_step:09} \t"
+                    #       f"Step(phase) {in_phase_step:09} \t"
+                    #       f"img/s {img_s:.2f} \t "
+                    #       f"img/s/worker {local_img_s:.3f} \t"
+                    #       f"d_loss {d_loss:.4f} \t "
+                    #       f"g_loss {g_loss:.4f} \t "
+                    #       f"d_lr {d_lr_val:.5f} \t"
+                    #       f"g_lr {g_lr_val:.5f} \t"
+                    #       # f"memory {memory_percentage:.4f} % \t"
+                    #       f"alpha {alpha.eval():.2f}")
 
 
                 # if verbose:
@@ -829,6 +860,7 @@ if __name__ == '__main__':
     parser.add_argument('--leakiness', type=float, default=0.2)
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--horovod', default=False, action='store_true')
+    parser.add_argument('--optuna_distributed', default=False, action='store_true', help="Pass this argument if you want to run optuna in distributed fashion. Run should be started as an mpi program (i.e. launching with mpirun or srun). Each MPI rank will work on its own Optuna trial. Do NOT combine with --horovod: parallelization happens at the trial level, it should NOT also be done within trials.")
     parser.add_argument('--calc_metrics', default=False, action='store_true')
     parser.add_argument('--g_annealing', default=1,
                         type=float, help='generator annealing rate, 1 -> no annealing.')
@@ -865,7 +897,7 @@ if __name__ == '__main__':
     parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc")
     args = parser.parse_args()
 
-    if args.horovod:
+    if args.horovod or args.optuna_distributed:
         hvd.init()
         np.random.seed(args.seed + hvd.rank())
         tf.random.set_random_seed(args.seed + hvd.rank())

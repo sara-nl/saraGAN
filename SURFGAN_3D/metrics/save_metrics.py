@@ -156,7 +156,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
                 fid = fid_local
             metrics['FID'] = fid
             if verbose:
-                print(f"FID: {fid:.4f}")
+                # print(f"FID: {fid:.4f}")
                 add_to_metric_summary('fid', fid, summary_metrics, sess)
 
         if compute_metrics['compute_psnrs']:

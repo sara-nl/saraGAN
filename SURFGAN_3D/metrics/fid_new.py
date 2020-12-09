@@ -364,7 +364,7 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
     # In this context, batch_size is the number of z-slices to be processed in a single batch (i.e. NOT the number of 3D samples)
     batch_size = 64
     if volumes_batch_fake.shape[1] < 64:
-        print("Warning: batch_size for FID calculation (%s) is bigger than the number of z-slices per sample (%s). Setting batch size equal to number of z-slices per sample" % ( batch_size, volumes_batch_fake.shape[1]))
+        # print("Warning: batch_size for FID calculation (%s) is bigger than the number of z-slices per sample (%s). Setting batch size equal to number of z-slices per sample" % ( batch_size, volumes_batch_fake.shape[1]))
         batch_size = volumes_batch_fake.shape[1]
     
     activations_real = []

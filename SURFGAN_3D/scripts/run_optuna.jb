@@ -1,9 +1,10 @@
 #!/bin/bash
-#SBATCH -n 1
+#SBATCH -N 4
 #SBATCH -c 6
-#SBATCH --ntasks-per-node=1
-#SBATCH --gres=gpu:1
-#SBATCH -p gpu_titanrtx_shared
+#SBATCH --ntasks-per-node=4
+###SBATCH --gres=gpu:1
+###SBATCH -p gpu_titanrtx_shared
+#SBATCH -p gpu_titanrtx
 #SBATCH -t 5-00:00:00
 
 DATETIME=$(date "+%Y%m%d_%H%M%S")
@@ -66,7 +67,11 @@ module list
 #        -x NCCL_DEBUG=INFO -x HOROVOD_MPI_THREADS_DISABLE=1 -x LD_LIBRARY_PATH -x PATH -x TF_USE_CUDNN -x OMP_NUM_THREADS \
 #        python -u main.py pgan /projects/2/managed_datasets/LIDC-IDRI/npy/average/ '(1, 64, 256, 256)' --starting_phase 7 --ending_phase 8 --latent_dim 512 --horovod  --scratch_path /scratch-local/$USER --base_batch_size 32 --network_size m --starting_alpha 1 --loss_fn wgan --gp_weight 10 --d_lr 5e-5 --g_lr 5e-5 --continue_path $CONTINUE_PATH --num_inter_ops 1
 
-python -u main.py $NETWORK_ARCH /nfs/radioct/14_pgan/npy/average/ --start_shape '(1, 5, 16, 16)' --final_shape '(1, 160, 512, 512)' --starting_phase 1 --ending_phase 1 --latent_dim 128 --scratch_path /scratch/$USER --base_batch_size 8 --network_size s --starting_alpha 1 --loss_fn wgan --gp_weight 10 --d_lr 1e-4 --g_lr 1e-4 --num_inter_ops 1 --logdir $LOGDIR --gpu --checkpoint_every_nsteps 50000000 --mixing_nimg 131072 --stabilizing_nimg 131072 --g_lr_increase=linear --d_lr_increase=linear --g_lr_decrease=exponential --d_lr_decrease=exponential --g_lr_rise_niter 655536 --d_lr_rise_niter 655536 --g_lr_decay_niter 655536 --d_lr_decay_niter 655536 --summary_large_every_nsteps 100000000 --summary_small_every_nsteps 100000000 --calc_metrics --metrics_every_nsteps 1024 --compute_FID
+# python -u main.py $NETWORK_ARCH /nfs/radioct/14_pgan/npy/average/ --start_shape '(1, 5, 16, 16)' --final_shape '(1, 160, 512, 512)' --starting_phase 1 --ending_phase 1 --latent_dim 128 --scratch_path /scratch/$USER --base_batch_size 8 --network_size s --starting_alpha 1 --loss_fn wgan --gp_weight 10 --d_lr 1e-4 --g_lr 1e-4 --num_inter_ops 1 --logdir $LOGDIR --gpu --checkpoint_every_nsteps 50000000 --mixing_nimg 131072 --stabilizing_nimg 131072 --g_lr_increase=linear --d_lr_increase=linear --g_lr_decrease=exponential --d_lr_decrease=exponential --g_lr_rise_niter 655536 --d_lr_rise_niter 655536 --g_lr_decay_niter 655536 --d_lr_decay_niter 655536 --summary_large_every_nsteps 100000000 --summary_small_every_nsteps 100000000 --calc_metrics --metrics_every_nsteps 1024 --compute_FID
+
+# Testing parallel optuna
+mpirun --report-bindings --map-by ppr:2:socket:PE=6 -x NCCL_DEBUG=INFO -x HOROVOD_MPI_THREADS_DISABLE=1 -x LD_LIBRARY_PATH -x PATH -x TF_USE_CUDNN -x OMP_NUM_THREADS \
+python -u main.py $NETWORK_ARCH /nfs/radioct/14_pgan/npy/average/ --start_shape '(1, 5, 16, 16)' --final_shape '(1, 160, 512, 512)' --starting_phase 1 --ending_phase 1 --latent_dim 128 --scratch_path /scratch/$USER --base_batch_size 8 --network_size s --starting_alpha 1 --loss_fn wgan --gp_weight 10 --d_lr 1e-4 --g_lr 1e-4 --num_inter_ops 1 --logdir $LOGDIR --gpu --checkpoint_every_nsteps 50000000 --mixing_nimg 131072 --stabilizing_nimg 131072 --g_lr_increase=linear --d_lr_increase=linear --g_lr_decrease=exponential --d_lr_decrease=exponential --g_lr_rise_niter 655536 --d_lr_rise_niter 655536 --g_lr_decay_niter 655536 --d_lr_decay_niter 655536 --summary_large_every_nsteps 100000000 --summary_small_every_nsteps 100000000 --calc_metrics --metrics_every_nsteps 1024 --compute_FID --optuna_distributed
 
 #mpirun --map-by ppr:1:socket:PE=12 -x NCCL_DEBUG=INFO -x HOROVOD_MPI_THREADS_DISABLE=1 -x LD_LIBRARY_PATH -x PATH -x TF_USE_CUDNN -x OMP_NUM_THREADS \
 #        python -u main.py pgan /projects/2/managed_datasets/LIDC-IDRI/npy/average/ '(1, 128, 512, 512)' --starting_phase 7 --ending_phase 8 --latent_dim 512 --horovod  --scratch_path /scratch-shared/$USER --base_batch_size 32 --network_size m --starting_alpha 1 --loss_fn wgan --gp_weight 10 --d_lr 5e-5 --g_lr 5e-5 --continue_path $CONTINUE_PATH --num_inter_ops 1
