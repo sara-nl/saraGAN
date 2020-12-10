@@ -403,6 +403,9 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
         
         #import tensorflow_gan as tfgan
         #fcd = tfgan.eval.frechet_classifier_distance_from_activations(activations_real[:, i, ...], activations_fake[:, i, ...])
+        # WARNING: I think this call is causing the problem with "cuSolverDN call failed with status =6" as soon as the batch size goes to 1.
+        # I think for a batch size of one, the activations_real and *_fake have a first dimension of size 1, which might confuse the fcd op.
+        # Maybe in those cases, I should pass activations_real[0, i, ...] and *fake[0, i, ...] instead?
         fid = sess.run(fcd, feed_dict = {activations1: activations_real[:, i, ...], activations2: activations_fake[:, i, ...]})
         
         # m1 = activations_real[:, i, ...].mean(axis=0)

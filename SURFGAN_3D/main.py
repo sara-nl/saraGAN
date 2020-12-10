@@ -6,6 +6,7 @@ import horovod.tensorflow as hvd
 import time
 import random
 import optuna
+# from signal import signal, SIGSEGV
 
 from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
@@ -25,7 +26,10 @@ from metrics.save_metrics import save_metrics
 # For TensorBoard Debugger:
 from tensorflow.python import debug as tf_debug
 
+# def sigsev_handler(sigNum, frame):
+#     print("Handle signal", sigNum)
 
+# signal(SIGSEGV, sigsev_handler)
 
 def main(args, config):
 
@@ -53,16 +57,19 @@ def main(args, config):
         if hvd.rank() != 0:
             study = optuna.load_study(study_name = study_name, storage = storage_sqlite)
 
-        ntrials = np.ceil(100/hvd.size())
+        ntrials = np.ceil(args.optuna_ntrials/hvd.size())
     else:
         # No horovod, so don't use SQlite, but just the default storage
         study = optuna.create_study(direction = "minimize", study_name = study_name)
-        ntrials = 100
+        ntrials = args.optuna_ntrials
 
     # See how much output we can get...
     optuna.logging.set_verbosity(optuna.logging.DEBUG)
 
-    study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials)
+    # Raised errors that should be caught, but trials should just continue:
+    catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError)
+
+    study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials)
 
     print("Number of finished trials: ", len(study.trials))
     print("Best trial:")
@@ -166,11 +173,14 @@ def optuna_objective(trial, args, config):
         # # dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
         # dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
 
+        # Use optuna to explore the base_batch_size. We sample the exponent, so that we sample from (1, 2, 4, 8, ..., 1024)
+        args.base_batch_size = 2 ** trial.suggest_int('base_batch_size_exponent', 0, 6)
+
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
 
         if phase >= args.starting_phase:
-            assert batch_size * global_size <= args.max_global_batch_size
+            # assert batch_size * global_size <= args.max_global_batch_size
             if verbose:
                 print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")
 
@@ -607,6 +617,11 @@ def optuna_objective(trial, args, config):
             local_step = 0
             # take_first_snapshot = True
 
+            if args.optuna_distributed:
+                print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}")
+            else:
+                print(f"Trial: {trial.number}, Parameters: {trial.params}")
+
             while True:
                 start = time.time()
 
@@ -670,7 +685,10 @@ def optuna_objective(trial, args, config):
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
-                        print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
+                        if args.optuna_distributed:
+                            print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
+                        else:
+                            print(f"Trial: {trial.number}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
                         trial.report(metrics['FID'], global_step)
                         if trial.should_prune():
                             raise optuna.TrialPruned()
@@ -794,7 +812,10 @@ def optuna_objective(trial, args, config):
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
-                        print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
+                        if args.optuna_distributed:
+                            print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
+                        else:
+                            print(f"Trial: {trial.number}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
                         trial.report(metrics['FID'], global_step)
                         if trial.should_prune():
                             raise optuna.TrialPruned()
@@ -944,6 +965,7 @@ if __name__ == '__main__':
     parser.add_argument('--compute_nrmses', default=False, action='store_true', help="Whether to compute the normalized mean squared error (frequency determined by metrics_every_nsteps). Not very meaningfull for GANs...")
     parser.add_argument('--checkpoint_every_nsteps', default=20000, type=int, help="Checkpoint files are saved every time the globally processed image counter is (approximately) a multiple of this number. Technically, the counter needs to satisfy: counter % checkpoint_every_nsteps < global_batch_size.")
     parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc")
+    parser.add_argument('--optuna_ntrials', default=100, type=int, help="Sets the number of Optuna Trials to do")
     args = parser.parse_args()
 
     if args.horovod or args.optuna_distributed:
@@ -1011,7 +1033,7 @@ if __name__ == '__main__':
         config.gpu_options.allow_growth = True
         # config.inter_op_parallelism_threads = 1
         #config.gpu_options.per_process_gpu_memory_fraction = 0.96
-        if args.horovod:
+        if args.horovod or args.optuna_distributed:
             config.gpu_options.visible_device_list = str(hvd.local_rank())
 
     else:
