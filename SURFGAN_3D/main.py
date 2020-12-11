@@ -174,7 +174,7 @@ def optuna_objective(trial, args, config):
         # dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
 
         # Use optuna to explore the base_batch_size. We sample the exponent, so that we sample from (1, 2, 4, 8, ..., 1024)
-        args.base_batch_size = 2 ** trial.suggest_int('base_batch_size_exponent', 0, 6)
+        args.base_batch_size = 2 ** trial.suggest_int('base_batch_size_exponent', 1, 6)
 
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
@@ -966,6 +966,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_every_nsteps', default=20000, type=int, help="Checkpoint files are saved every time the globally processed image counter is (approximately) a multiple of this number. Technically, the counter needs to satisfy: counter % checkpoint_every_nsteps < global_batch_size.")
     parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc")
     parser.add_argument('--optuna_ntrials', default=100, type=int, help="Sets the number of Optuna Trials to do")
+    parser.add_argument('--optuna_besttrial', default=100, type=str, help="SQlite Optuna database file")
     args = parser.parse_args()
 
     if args.horovod or args.optuna_distributed:
