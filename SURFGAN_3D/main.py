@@ -26,12 +26,13 @@ from metrics.save_metrics import save_metrics
 # For TensorBoard Debugger:
 from tensorflow.python import debug as tf_debug
 
-# def sigsev_handler(sigNum, frame):
-#     print("Handle signal", sigNum)
-
-# signal(SIGSEGV, sigsev_handler)
-
 def main(args, config):
+
+    # Should output be printed?
+    if (args.horovod and hvd.rank() == 0) or not args.horovod:
+        verbose = True
+    else:
+        verbose = False
 
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
     study_name = f"optuna_{timestamp}"
@@ -40,44 +41,59 @@ def main(args, config):
     if args.logdir is not None:
         storage_sqlite=f'sqlite:///{args.logdir}/optuna.db'
     
+    # Do we want to run optuna trials? Or run a convergence training based on a previous trial result?
+    if args.optuna_use_best_trial:
+        study_name = optuna.study.get_all_study_summaries(args.optuna_use_best_trial)[0].study_name
+        if verbose:
+            print("Restoring best trial:")
+            print(f"    Study name: {study_name}")
+            print(f"    Database: {args.optuna_use_best_trial}")
+        study = optuna.load_study(study_name = study_name, storage = args.optuna_use_best_trial)
 
-
-    # If you want to run optuna in distributed fashion, through an mpirun...
-    if args.optuna_distributed:
-        # Only worker with rank 0 should create a study:
-        study = None
-        if hvd.rank() == 0:
-            print("Storing SQlite database for optuna at %s" %storage_sqlite)
-            study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite)
+        # Start a full training with the best_trial parameters that were obtained previously:
+        if verbose:
+            print("Running a single training with the following fixed trial parameters:")
+            print(study.best_trial)
+        optuna_objective(study.best_trial, args, config)
     
-        # Call a barrier to make sure the study has been created before the other workers load it
-        MPI.COMM_WORLD.Barrier()
-
-        # Then, make all other workers load the study
-        if hvd.rank() != 0:
-            study = optuna.load_study(study_name = study_name, storage = storage_sqlite)
-
-        ntrials = np.ceil(args.optuna_ntrials/hvd.size())
+    # Else, run the optimization trials
     else:
-        # No horovod, so don't use SQlite, but just the default storage
-        study = optuna.create_study(direction = "minimize", study_name = study_name)
-        ntrials = args.optuna_ntrials
+        # If you want to run optuna in distributed fashion, through an mpirun...
+        if args.optuna_distributed:
+            # Only worker with rank 0 should create a study:
+            study = None
+            if hvd.rank() == 0:
+                print("Storing SQlite database for optuna at %s" %storage_sqlite)
+                study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite)
+        
+            # Call a barrier to make sure the study has been created before the other workers load it
+            MPI.COMM_WORLD.Barrier()
 
-    # See how much output we can get...
-    optuna.logging.set_verbosity(optuna.logging.DEBUG)
+            # Then, make all other workers load the study
+            if hvd.rank() != 0:
+                study = optuna.load_study(study_name = study_name, storage = storage_sqlite)
 
-    # Raised errors that should be caught, but trials should just continue:
-    catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError)
+            ntrials = np.ceil(args.optuna_ntrials/hvd.size())
+        else:
+            # No horovod, so don't use SQlite, but just the default storage
+            study = optuna.create_study(direction = "minimize", study_name = study_name)
+            ntrials = args.optuna_ntrials
 
-    study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials)
+        # See how much output we can get...
+        optuna.logging.set_verbosity(optuna.logging.DEBUG)
 
-    print("Number of finished trials: ", len(study.trials))
-    print("Best trial:")
-    trial = study.best_trial
-    print(" Value: ", trial.value)
-    print(" Params: ")
-    for key, value in trial.params.items():
-        print("    {}: {}".format(key, value))
+        # Raised errors that should be caught, but trials should just continue (errors are e.g. thrown when OOM)
+        catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError)
+
+        study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials)
+
+        print("Number of finished trials: ", len(study.trials))
+        print("Best trial:")
+        trial = study.best_trial
+        print(" Value: ", trial.value)
+        print(" Params: ")
+        for key, value in trial.params.items():
+            print("    {}: {}".format(key, value))
 
 def optuna_objective(trial, args, config):
 
@@ -966,7 +982,7 @@ if __name__ == '__main__':
     parser.add_argument('--checkpoint_every_nsteps', default=20000, type=int, help="Checkpoint files are saved every time the globally processed image counter is (approximately) a multiple of this number. Technically, the counter needs to satisfy: counter % checkpoint_every_nsteps < global_batch_size.")
     parser.add_argument('--logdir', default=None, type=str, help="Allows one to specify the log directory. The default is to store logs and checkpoints in the <repository_root>/runs/<network_architecture>/<datetime_stamp>. You may want to override from the batch script so you can store additional logs in the same directory, e.g. the SLURM output file, job script, etc")
     parser.add_argument('--optuna_ntrials', default=100, type=int, help="Sets the number of Optuna Trials to do")
-    parser.add_argument('--optuna_besttrial', default=100, type=str, help="SQlite Optuna database file")
+    parser.add_argument('--optuna_use_best_trial', default=None, type=str, help="SQlite Optuna database file. This will run the training with the parameters from the best_trial in the first study in that database.")
     args = parser.parse_args()
 
     if args.horovod or args.optuna_distributed:
