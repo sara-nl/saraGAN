@@ -382,47 +382,63 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
 
     fids = []
 
-    for i in range(activations_real.shape[1]):
-        #print("DEBUG: Computing frechet distance for activation at depth layer %i out of %i" % (i, activations_real.shape[1]))
+    # Use freched_classifier_distance from https://github.com/tsc2017/Frechet-Inception-Distance/blob/master/TF1/fid_tpu_tf1.py
+    # This uses tensorflow_gan's tfgan.eval.frechec_classifier_distance_from_activations (https://github.com/tensorflow/gan)
+    # Since this is in a for loop AND in a function that gets called many times during training,
+    # we first try to get the tensors from the default_graph to see if they already exist.
+    # If not, they are created. That should only happen the very first time the FID is computed.
+    try:
+        activations1 = tf.get_default_graph().get_tensor_by_name("activations1:0")
+        activations2 = tf.get_default_graph().get_tensor_by_name("activations2:0")
+        fcd = tf.get_default_graph().get_tensor_by_name("fid_from_activations:0")
+    except:
+        import tensorflow_gan as tfgan
+        activations1 = tf.compat.v1.placeholder(tf.float32, [None, None], name = 'activations1')
+        activations2 = tf.compat.v1.placeholder(tf.float32, [None, None], name = 'activations2')
+        fcd = tfgan.eval.frechet_classifier_distance_from_activations(activations1, activations2)
+        fcd = tf.identity(fcd, name = 'fid_from_activations')
 
-        # Use freched_classifier_distance from https://github.com/tsc2017/Frechet-Inception-Distance/blob/master/TF1/fid_tpu_tf1.py
-        # This uses tensorflow_gan's tfgan.eval.frechec_classifier_distance_from_activations (https://github.com/tensorflow/gan)
-        # Since this is in a for loop AND in a function that gets called many times during training,
-        # we first try to get the tensors from the default_graph to see if they already exist.
-        # If not, they are created. That should only happen the very first time the FID is computed.
-        try:
-            activations1 = tf.get_default_graph().get_tensor_by_name("activations1:0")
-            activations2 = tf.get_default_graph().get_tensor_by_name("activations2:0")
-            fcd = tf.get_default_graph().get_tensor_by_name("fid_from_activations:0")
-        except:
-            import tensorflow_gan as tfgan
-            activations1 = tf.compat.v1.placeholder(tf.float32, [None, None], name = 'activations1')
-            activations2 = tf.compat.v1.placeholder(tf.float32, [None, None], name = 'activations2')
-            fcd = tfgan.eval.frechet_classifier_distance_from_activations(activations1, activations2)
-            fcd = tf.identity(fcd, name = 'fid_from_activations')
-        
-        #import tensorflow_gan as tfgan
-        #fcd = tfgan.eval.frechet_classifier_distance_from_activations(activations_real[:, i, ...], activations_fake[:, i, ...])
-        # WARNING: I think this call is causing the problem with "cuSolverDN call failed with status =6" as soon as the batch size goes to 1.
-        # I think for a batch size of one, the activations_real and *_fake have a first dimension of size 1, which might confuse the fcd op.
-        # Maybe in those cases, I should pass activations_real[0, i, ...] and *fake[0, i, ...] instead?
-        fid = sess.run(fcd, feed_dict = {activations1: activations_real[:, i, ...], activations2: activations_fake[:, i, ...]})
-        
-        # m1 = activations_real[:, i, ...].mean(axis=0)
-        # m2 = activations_fake[:, i, ...].mean(axis=0)
+    # To avoid the cuSolverDN error that happens when a batch_size of 1 is fed to tfgan.eval.frechet_classifier_distance_from_activations:
+    # what if I just reshape the activations_real and activations_fake so as to merge the dimensions that represent the CT ([0]), and the individual slice in the CT ([1])?
+    # E.g. if activations_real.shape = (2, 20, 2048) (= batch_size, z-slices, activations), we reshape to (40, 2048). 
+    # That way, we just compute the FID based on the activations from each z-slice, where we treat the z-slices completely independently
+    activations_real = activations_real.reshape(-1, activations_real.shape[-1])
+    activations_fake = activations_fake.reshape(-1, activations_fake.shape[-1])
 
-        # sigma1 = np.cov(activations_real[:, i, ...], rowvar=False)
-        # sigma2 = np.cov(activations_fake[:, i, ...], rowvar=False)
+    fids = sess.run(fcd, feed_dict = {activations1: activations_real, activations2: activations_fake})
 
-        # fid = calculate_frechet_distance(m1, sigma1, m2, sigma2)
+    # # WARNING: I think this call is causing the problem with "cuSolverDN call failed with status =6" as soon as the batch size goes to 1.
+    # # I think for a batch size of one, the activations_real and *_fake have a first dimension of size 1, which might confuse the fcd op.
+    # # Maybe in those cases, I should pass activations_real[0, i, ...] and *fake[0, i, ...] instead?
+    # print(f"DEBUG: activations_real.shape: {activations_real.shape}")
+    # if activations_real.shape[0] == 1:
+    #     fid = sess.run(fcd, feed_dict = {activations1: activations_real[0, ...], activations2: activations_fake[0, ...]})
+    # else:
+    #     for i in range(activations_real.shape[1]):
+    #         #print("DEBUG: Computing frechet distance for activation at depth layer %i out of %i" % (i, activations_real.shape[1]))
 
-        # print("Computed FID using old function: %s" % fid)
+    #         #import tensorflow_gan as tfgan
+    #         #fcd = tfgan.eval.frechet_classifier_distance_from_activations(activations_real[:, i, ...], activations_fake[:, i, ...])
+            
+    #         fid = sess.run(fcd, feed_dict = {activations1: activations_real[:, i, ...], activations2: activations_fake[:, i, ...]})
+    #         print(f"fid.shape: {fid.shape}")
+    #         print(f"fid: {fid}")
+    #         # m1 = activations_real[:, i, ...].mean(axis=0)
+    #         # m2 = activations_fake[:, i, ...].mean(axis=0)
 
-        fids.append(fid)
+    #         # sigma1 = np.cov(activations_real[:, i, ...], rowvar=False)
+    #         # sigma2 = np.cov(activations_fake[:, i, ...], rowvar=False)
 
-    fids = np.stack(fids)
+    #         # fid = calculate_frechet_distance(m1, sigma1, m2, sigma2)
 
-    assert len(fids) == volumes_batch_real.shape[1]
+    #         # print("Computed FID using old function: %s" % fid)
+
+    #         fids.append(fid)
+
+    # fids = np.stack(fids)
+    # print(f"fids.shape: {fids.shape}")
+
+    # assert len(fids) == volumes_batch_real.shape[1]
 
     return fids
 
