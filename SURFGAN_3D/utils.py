@@ -6,6 +6,160 @@ from multiprocessing import Pool
 import os
 import horovod.tensorflow as hvd
 
+def scale_lr(g_lr, d_lr, g_scaling, d_scaling, horovod):
+    """Scales the learning rates if horovod is used.
+    Parameters:
+        g_lr: generator learning rate
+        d_lr: discriminator learning rate
+        g_scaling: scaling method to use for g_lr
+        d_scaling: scaling method to use for d_lr
+        horovod: if horovod is enabled (bool)
+    Returns:
+        g_lr, d_lr (scaled for horovod parallelism, if applicable)
+    """
+    if horovod:
+        if g_scaling == 'sqrt':
+            g_lr = g_lr * np.sqrt(hvd.size())
+        elif g_scaling == 'linear':
+            g_lr = g_lr * hvd.size()
+        elif g_scaling == 'none':
+            pass
+        else:
+            raise ValueError(g_scaling)
+
+        if d_scaling == 'sqrt':
+            d_lr = d_lr * np.sqrt(hvd.size())
+        elif d_scaling == 'linear':
+            d_lr = d_lr * hvd.size()
+        elif d_scaling == 'none':
+            pass
+        else:
+            raise ValueError(d_scaling)
+
+    return g_lr, d_lr
+            
+def get_num_metric_samples(num_metric_samples, batch_size, global_size):
+    """Returns the number of samples to be trained on before metrics are recalculated"""
+    if not num_metric_samples:
+        if batch_size > 1:
+            num_metric_samples = batch_size * global_size
+        else:
+            num_metric_samples = 2 * global_size
+    else:
+        num_metric_samples = num_metric_samples
+    return num_metric_samples
+
+def get_current_input_shape(phase, batch_size, start_shape):
+    """Gets the shape of the input for the current phase, based on the starting shape and batch size"""
+    start_shape = parse_tuple(start_shape)
+    current_shape = [batch_size, get_num_channels(start_shape), *[size * 2 ** (phase - 1) for size in
+                                                       get_base_shape(start_shape)[1:]]]
+    return current_shape
+
+# TODO: I could probably move the normalization to this function, and do it based on arguments...
+def get_image_input_tensor(phase, batch_size, start_shape, noise_stddev=None):
+    """Gets the input tensor for the network, initialized with the correct shape. Normally distributed noise can be added to make training more robust to noise patterns in the input.
+    Parameters:
+      phase: the current phase of the training
+      batch_size: the current batch size (local batch size in case of horovd based training)
+      start_shape: the starting shape of the lowest resolution images
+      noise_stddev: standard deviation of the normal distribution that the noise is sampled from. Should probably be of the same order of the noise in your input images (after normalization, if normalization is applied to the inputs).
+    Returns:
+      tf.Tensor that can be used as input tensor for the gan
+    """
+    start_shape = parse_tuple(start_shape)
+    current_shape = [batch_size, get_num_channels(start_shape), *[size * 2 ** (phase - 1) for size in
+                                                       get_base_shape(start_shape)[1:]]]
+    real_image_input = tf.placeholder(shape=current_shape, dtype=tf.float32)
+    real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * noise_stddev
+    return real_image_input
+
+def get_xy_dim(phase, start_shape):
+    """Get the dimensions of the current images in xy"""
+    start_shape = parse_tuple(start_shape)
+    start_resolution = start_shape[-1]
+    size = start_resolution * (2 ** (phase - 1))
+    return size
+
+def get_numpy_dataset(phase, starting_phase, start_shape, dataset_path, scratch_path, verbose):
+    """Convenience function that wraps around the initialization of a NumpyPathDataset. Resolution of the dataset to be read in is inferred from the phase and the starting shape"""
+    size = get_xy_dim(phase, start_shape)
+
+    data_path = os.path.join(dataset_path, f'{size}x{size}/')
+    if verbose:
+        print(f'Phase {phase}: reading data from dir {data_path}')
+    npy_data = NumpyPathDataset(data_path, scratch_path, copy_files=(hvd.local_rank() == 0),
+                                   is_correct_phase=phase >= starting_phase)
+    return npy_data
+
+def get_num_channels(start_shape):
+    """Get the number of channels, based on the starting shape"""
+    start_shape = parse_tuple(start_shape)
+    return start_shape[0]
+
+def get_num_phases(start_shape, final_shape):
+    """Get the number of phases, derived from the start and final shapes"""
+    start_shape = parse_tuple(start_shape)
+    start_resolution = start_shape[-1]
+    final_shape = parse_tuple(final_shape)
+    final_resolution = final_shape[-1]
+    return int(np.log2(final_resolution/start_resolution))
+
+def get_base_shape(start_shape):
+    """Get the base shape of the network, i.e. the shape of the first layer in the generator.
+    Returns: A tuple representing the shape of the first layer at the base of the generator network"""
+    start_shape = parse_tuple(start_shape)
+    base_shape = (start_shape[0], start_shape[1], start_shape[2], start_shape[3])
+    return base_shape
+
+def get_filewriter(logdir, verbose):
+    """Creates a tf.summary.FileWriter for logdir, but only if this is rank 0 (in case of MPI). Returns None for other ranks"""
+    if verbose:
+        writer = tf.summary.FileWriter(logdir=logdir)
+    else:
+        writer = None
+    return writer
+
+def get_logdir(args):
+    """Checks if a logdir was defined. If not, a logdir is created based on a timestamp"""
+    if args.logdir is not None:
+        logdir = args.logdir
+    else:
+        timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
+        logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
+
+    if get_verbosity(args.horovod, args.optuna_distributed):
+        print(f"Saving files to {logdir}")
+    return logdir
+
+def get_verbosity(horovod, optuna_distributed):
+    """Checks if this is an MPI process. If so, returns "True" only for rank 0
+    Parameters:
+    --------
+      horovod: if this is a horovod enabled run (i.e. args.horovod = True). Boolean.
+      optuna_distributed: if this is an optuna distributed run (i.e. args.optuna_distributed = True). Boolean
+    Returns:
+    --------
+      Boolean indicating whether output should be printed (only for rank 0 if this is an MPI based run)
+    """
+    if horovod or optuna_distributed:
+        verbose = hvd.rank() == 0
+    else:
+        verbose = True
+    return verbose
+
+def get_compute_metrics_dict(args):
+    compute_metrics = {
+        'compute_FID': args.compute_FID,
+        'compute_swds': args.compute_swds,
+        'compute_ssims': args.compute_ssims,
+        'compute_psnrs': args.compute_psnrs,
+        'compute_mses': args.compute_mses,
+        'compute_nrmses': args.compute_nrmses,
+    }
+    
+    return compute_metrics
+
 # Op to update the learning rate according to a schedule
 def lr_update(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_decrease, lr_rise_niter, lr_decay_niter):
     """Update the learning rate according to a schedule.
