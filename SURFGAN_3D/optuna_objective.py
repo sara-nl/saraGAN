@@ -26,6 +26,7 @@ from networks.loss import forward_simultaneous, forward_generator, forward_discr
 from metrics.save_metrics import save_metrics
 
 import networks as nw
+import optimization as opt
 
 def optuna_objective(trial, args, config):
 
@@ -177,109 +178,29 @@ def optuna_objective(trial, args, config):
         init_alpha = alpha.assign(1)
         update_alpha = nw.ops.alpha_update(alpha, args.mixing_nimg, args.starting_alpha, batch_size, global_size)
 
-        if args.optim_strategy == 'simultaneous':
-            gen_loss, disc_loss, gp_loss, gen_sample = forward_simultaneous(
-                generator,
-                discriminator,
-                real_image_input,
-                args.latent_dim,
-                alpha,
-                phase,
-                num_phases,
-                base_dim,
-                base_shape,
-                args.activation,
-                args.leakiness,
-                args.network_size,
-                args.loss_fn,
-                args.gp_weight
-            )
-            gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
-            disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-
-            g_gradients, g_variables = zip(*optimizer_gen.compute_gradients(gen_loss,
-                                                                            var_list=gen_vars))
-            if args.g_clipping:
-                g_gradients, _ = tf.clip_by_global_norm(g_gradients, 1.0)
-
-
-            d_gradients, d_variables = zip(*optimizer_disc.compute_gradients(disc_loss,
-                                                                             var_list=disc_vars))
-            if args.d_clipping:
-                d_gradients, _ = tf.clip_by_global_norm(d_gradients, 1.0)
-
-
-            g_norms = tf.stack([tf.norm(grad) for grad in g_gradients if grad is not None])
-            max_g_norm = tf.reduce_max(g_norms)
-            d_norms = tf.stack([tf.norm(grad) for grad in d_gradients if grad is not None])
-            max_d_norm = tf.reduce_max(d_norms)
-
-            # g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
-            # max_g_norm = tf.reduce_max(g_norms)
-            # d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
-            # max_d_norm = tf.reduce_max(d_norms)
-
-            # g_clipped_grads = [(tf.clip_by_norm(grad, clip_norm=128), var) for grad, var in g_gradients]
-            # train_gen = optimizer_gen.apply_gradients(g_clipped_grads)
-            train_gen = optimizer_gen.apply_gradients(zip(g_gradients, g_variables))
-            train_disc = optimizer_disc.apply_gradients(zip(d_gradients, d_variables))
-
-            # train_gen = optimizer_gen.apply_gradients(g_gradients)
-            # train_disc = optimizer_disc.apply_gradients(d_gradients)
-
-        elif args.optim_strategy == 'alternate':
-
-            disc_loss, gp_loss = forward_discriminator(
-                generator,
-                discriminator,
-                real_image_input,
-                args.latent_dim,
-                alpha,
-                phase,
-                num_phases,
-                args.base_dim,
-                base_shape,
-                args.activation,
-                args.leakiness,
-                args.network_size,
-                args.loss_fn,
-                args.gp_weight,
-                # conditioning=real_label
-            )
-
-            disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-            d_gradients = optimizer_disc.compute_gradients(disc_loss, var_list=disc_vars)
-            d_norms = tf.stack([tf.norm(grad) for grad, var in d_gradients if grad is not None])
-            max_d_norm = tf.reduce_max(d_norms)
-
-            train_disc = optimizer_disc.apply_gradients(d_gradients)
-
-            with tf.control_dependencies([train_disc]):
-                gen_sample, gen_loss = forward_generator(
-                    generator,
-                    discriminator,
-                    real_image_input,
-                    args.latent_dim,
-                    alpha,
-                    phase,
-                    num_phases,
-                    base_dim,
-                    base_shape,
-                    args.activation,
-                    args.leakiness,
-                    args.network_size,
-                    args.loss_fn,
-                    is_reuse=True
-                )
-
-                gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
-                g_gradients = optimizer_gen.compute_gradients(gen_loss, var_list=gen_vars)
-                g_norms = tf.stack([tf.norm(grad) for grad, var in g_gradients if grad is not None])
-                max_g_norm = tf.reduce_max(g_norms)
-                train_gen = optimizer_gen.apply_gradients(g_gradients)
-
-        else:
-            raise ValueError("Unknown optim strategy ", args.optim_strategy)
+# Performs a forward pass, computes gradients, clips them (if desired), and then applies them.
+        # Supports simultaneous forward pass of generator and discriminator, or alternatingly (discriminator first)
+        train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm = opt.optimize_step(
+            optimizer_gen,
+            optimizer_disc,
+            generator,
+            discriminator,
+            real_image_input,
+            args.latent_dim,
+            alpha,
+            phase,
+            get_num_phases(args.start_shape, args.final_shape),
+            base_dim,
+            get_base_shape(args.start_shape),
+            args.activation,
+            args.leakiness,
+            args.network_size,
+            args.loss_fn,
+            args.gp_weight,
+            args.optim_strategy,
+            args.g_clipping,
+            args.d_clipping
+        )
 
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
@@ -288,6 +209,8 @@ def optuna_objective(trial, args, config):
         # train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
         # train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
 
+        gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+        disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
         ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
         ema_op = ema.apply(gen_vars)
         # Transfer EMA values to original variables
