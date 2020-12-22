@@ -10,6 +10,7 @@ import optuna
 
 # from dataset import NumpyPathDataset
 # from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
+from utils import get_verbosity
 from mpi4py import MPI
 import os
 # import importlib
@@ -30,11 +31,7 @@ from tensorflow.python import debug as tf_debug
 
 def main(args, config):
 
-    # Should output be printed?
-    if (args.horovod and hvd.rank() == 0) or not args.horovod:
-        verbose = True
-    else:
-        verbose = False
+    verbose = get_verbosity(args.horovod, args.optuna_distributed)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
     study_name = f"optuna_{timestamp}"
