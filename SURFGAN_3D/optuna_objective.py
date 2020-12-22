@@ -53,16 +53,6 @@ def optuna_objective(trial, args, config):
     # Allow GPU memory growth
     os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
-    if verbose:
-        writer = tf.summary.FileWriter(logdir=logdir)
-        print("Arguments passed:")
-        print(args)
-        print(f"Saving files to {logdir}")
-
-    else:
-        writer = None
-        #pass
-
     # Get starting & final resolutions
     start_shape = parse_tuple(args.start_shape)
     start_resolution = start_shape[-1]
@@ -82,7 +72,7 @@ def optuna_objective(trial, args, config):
 #base_dim = num_filters(1, num_phases, base_shape = base_shape, size=args.network_size)
     # TODO: DON'T HARDCODE BASEDIM (testing for now...)
     # With more than 256 filters, the dense connection between the latent space and first filters has too many parameters if you start with e.g. a latent vector of 16x16x10=2560 elements
-    base_dim=128
+    base_dim = args.first_conv_nfilters
 
     if verbose:
         print(f"Start resolution: {start_resolution}")
