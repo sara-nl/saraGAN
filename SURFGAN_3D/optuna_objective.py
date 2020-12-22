@@ -8,7 +8,7 @@ import random
 # import optuna
 # # from signal import signal, SIGSEGV
 
-from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
+from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
 from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape
 from optuna_suggestions import optuna_override_undefined
@@ -27,6 +27,7 @@ from metrics.save_metrics import save_metrics
 
 import networks as nw
 import optimization as opt
+import summary
 
 def optuna_objective(trial, args, config):
 
@@ -72,6 +73,7 @@ def optuna_objective(trial, args, config):
     var_list = list()
     global_step = 0
 
+    # Loop over the different phases (resolutions) of training of a progressive architecture
     for phase in range(1, get_num_phases(args.start_shape, args.final_shape) + 1):
 
         tf.reset_default_graph()
@@ -87,8 +89,6 @@ def optuna_objective(trial, args, config):
 
         # ------------------------------------------------------------------------------------------#
         # DATASET
-
-        # size = start_resolution * (2 ** (phase - 1))
 
         # Get NumpyPathDataset object for current phase. It's an iterable object that returns the path to samples in the dataset
         npy_data = get_numpy_dataset(phase, args.starting_phase, args.start_shape, args.dataset_path, args.scratch_path, verbose)
@@ -135,12 +135,12 @@ def optuna_objective(trial, args, config):
         d_lr_max = tf.constant(args.g_lr, tf.float32)
         steps_per_phase = tf.constant(args.mixing_nimg + args.stabilizing_nimg)
 
-        update_g_lr = lr_update(lr = g_lr, intra_phase_step = intra_phase_step, 
+        update_g_lr = opt.lr_update(lr = g_lr, intra_phase_step = intra_phase_step, 
                                      steps_per_phase = steps_per_phase, lr_max = g_lr_max,
                                      lr_increase = args.g_lr_increase, lr_decrease = args.g_lr_decrease,
                                      lr_rise_niter = args.g_lr_rise_niter, lr_decay_niter = args.g_lr_decay_niter
                                     )
-        update_d_lr = lr_update(lr = d_lr, intra_phase_step = intra_phase_step, 
+        update_d_lr = opt.lr_update(lr = d_lr, intra_phase_step = intra_phase_step, 
                                      steps_per_phase = steps_per_phase, lr_max = d_lr_max,
                                      lr_increase = args.d_lr_increase, lr_decrease = args.d_lr_decrease,
                                      lr_rise_niter = args.d_lr_rise_niter, lr_decay_niter = args.d_lr_decay_niter
@@ -202,80 +202,38 @@ def optuna_objective(trial, args, config):
         ema_update_weights = tf.group(
             [tf.assign(var, ema.average(var)) for var in gen_vars])
 
-        with tf.name_scope('summaries'):
-            # We want to store large / heavy summaries like images less frequently
-            summary_small = []
-            summary_large = []
-            # Summaries
-            summary_small.append(tf.summary.scalar('d_loss', disc_loss))
-            summary_small.append(tf.summary.scalar('g_loss', gen_loss))
-            summary_small.append(tf.summary.scalar('gp', tf.reduce_mean(gp_loss)))
+        # ------------------------------------------------------------------------------------------#
+        # Summaries
 
-            for g in zip(g_gradients, g_variables):
-                summary_small.append(tf.summary.histogram(f'grad_{g[1].name}', g[0]))
+        summary_small = summary.create_small_summary(
+            disc_loss,
+            gen_loss,
+            gp_loss,
+            g_gradients,
+            g_variables,
+            d_gradients,
+            d_variables,
+            max_g_norm,
+            max_d_norm,
+            gen_sample,
+            real_image_input,
+            alpha,
+            g_lr,
+            d_lr
+        )
+        summary_large = summary.create_large_summary(
+            real_image_input,
+            gen_sample
+        )
 
-            for g in zip(d_gradients, d_variables):
-                summary_small.append(tf.summary.histogram(f'grad_{g[1].name}', g[0]))
-
-            # tf.summary.scalar('convergence', tf.reduce_mean(disc_real) - tf.reduce_mean(tf.reduce_mean(disc_fake_d)))
-
-            summary_small.append(tf.summary.scalar('max_g_grad_norm', max_g_norm))
-            summary_small.append(tf.summary.scalar('max_d_grad_norm', max_d_norm))
-
-            # Spread out 3D image as 2D grid, slicing in the z-dimension
-            real_image_grid = tf.transpose(real_image_input[0], (1, 2, 3, 0))
-            shape = real_image_grid.get_shape().as_list()
-            print(f'real_image_grid shape: {shape}')
-            grid_cols = int(2 ** np.floor(np.log(np.sqrt(shape[0])) / np.log(2)))
-            # If the image z-dimension isn't divisible by grid_rows, we need to pad
-            if (shape[0] % grid_cols) != 0:
-                # Initialize pad_list for numpy padding
-                pad_list = [[0,0] for i in range(0, len(shape))]
-                # Compute number of slices we need to add to get to the next multiple of shape[0]
-                pad_nslices = grid_cols - (shape[0] % grid_cols)
-                pad_list[0] = [0, pad_nslices]
-                real_image_grid = tf.pad(real_image_grid, tf.constant(pad_list), "CONSTANT", constant_values=0)
-                # Recompute shape, so that the number of grid_rows is adapted to that
-                shape = real_image_grid.get_shape().as_list()
-            grid_rows = int(np.ceil(shape[0] / grid_cols))
-            grid_shape = [grid_rows, grid_cols]
-            real_image_grid = image_grid(real_image_grid, grid_shape, image_shape=shape[1:3],
-                                         num_channels=shape[-1])
-
-            fake_image_grid = tf.transpose(gen_sample[0], (1, 2, 3, 0))
-            # Use the same padding for the fake_image_grid
-            if (fake_image_grid.get_shape().as_list()[0] % grid_cols) != 0:
-                fake_image_grid = tf.pad(fake_image_grid, tf.constant(pad_list), "CONSTANT", constant_values=0)
-            fake_image_grid = image_grid(fake_image_grid, grid_shape, image_shape=shape[1:3],
-                                         num_channels=shape[-1])
-
-            fake_image_grid = tf.clip_by_value(fake_image_grid, -1, 2)
-
-            summary_large.append(tf.summary.image('real_image', real_image_grid))
-            summary_large.append(tf.summary.image('fake_image', fake_image_grid))
-
-            summary_small.append(tf.summary.scalar('fake_image_min', tf.math.reduce_min(gen_sample)))
-            summary_small.append(tf.summary.scalar('fake_image_max', tf.math.reduce_max(gen_sample)))
-
-            summary_small.append(tf.summary.scalar('real_image_min', tf.math.reduce_min(real_image_input[0])))
-            summary_small.append(tf.summary.scalar('real_image_max', tf.math.reduce_max(real_image_input[0])))
-            summary_small.append(tf.summary.scalar('alpha', alpha))
-
-            summary_small.append(tf.summary.scalar('g_lr', g_lr))
-            summary_small.append(tf.summary.scalar('d_lr', d_lr))
-
-            # merged_summaries = tf.summary.merge_all()
-            summary_small = tf.summary.merge(summary_small)
-            summary_large = tf.summary.merge(summary_large)
-
+        # ------------------------------------------------------------------------------------------#
         # Other ops
+        
         init_op = tf.global_variables_initializer()
         # Probably these alpha ops could be with the other ops above, but... it changes reproducibility of my runs. So for now, I'll leave them here.
         assign_starting_alpha = alpha.assign(args.starting_alpha)
         assign_zero = alpha.assign(0)
         broadcast = hvd.broadcast_global_variables(0)
-        #print("Global variables:")
-        #print("%s" % tf.compat.v1.global_variables())
 
         with tf.Session(config=config) as sess:
             # if args.gpu:

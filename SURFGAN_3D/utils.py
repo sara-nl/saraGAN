@@ -235,57 +235,57 @@ def lr_update(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_dec
  
     return lr.assign(lr_update)
 
-# Op to update the learning rate according to a schedule
-def lr_update_numpy(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_decrease, lr_rise_niter, lr_decay_niter):
-    """Update the learning rate according to a schedule.
-    Args:
-      lr: Tensor which contains the current learning rate that needs to be updated
-      intra_phase_step: Step counter representing the number of images processed since the start of the current phase
-      steps_per_phase: total number of steps in a phase
-      lr_max: learning rate after increase (and before decrease) segments
-      lr_increase: type of increase function to use (e.g. None, linear, exponential)
-      lr_decrease: type of decrease function to use (e.g. None, linear, exponential)
-      lr_rise_niter: number of iterations over which the increase from the minimum to the maximum value should happen
-      lr_decay_niter: number of iterations over which the decrease from the maximum to the minumum value should happen.
-    Returns: an Op that can be passed to session.run to update the learning (lr) Tensor
-    """
-    # Is a learning rate schedule defined at all? (otherwise, immediately return a constant)
-    if not (lr_increase or lr_decrease):
-        return lr.assign(lr_max)
-    else:
-        # Are we in the increasing part?
-        if intra_phase_step < lr_rise_niter:
-            if not lr_increase:
-                updated_lr = lr_max
-            elif lr_increase == 'linear':
-                updated_lr = (intra_phase_step / lr_rise_niter) * lr_max
-            elif lr_increase == 'exponential':
-                # Define lr at step 0 to be 1% of lr_max
-                a = lr_max / 100
-                # Make sure then when intra_phase_step = lr_rise_niter, the lr = lr_max
-                b = np.log(100 / lr_rise_niter) 
-                update_lr = a*np.exp(b*intra_phase_step)  
-            else:
-                raise NotImplementedError("Unsupported learning rate increase type: %s" % lr_increase)
-        # Are we in the decreasing part?
-        elif intra_phase_step > (steps_per_phase - lr_decay_niter):
-            if not lr_decrease:
-                updated_lr = lr_max
-            if lr_decrease == 'linear':
-                updated_lr = ((steps_per_phase - intra_phase_step) / lr_decay_niter) * lr_max
-            elif lr_increase == 'exponential':
-                # Define lr at the last step to be 1% of lr_max
-                a = lr_max / 100
-                # Make sure that when intra_phase_step == steps_per_phase - lr_decay_niter, lr_max is returned
-                b = np.log(100 / lr_decay_niter)
-                update_lr = a*np.exp(b*(steps_per_phase - intra_phase_step))
-            else:
-                raise NotImplementedError("Unsupported learning rate decrease type: %s" % lr_decrease)
-        # Are we in the flat part?
-        else:
-            updated_lr = lr_max
+# # Op to update the learning rate according to a schedule
+# def lr_update_numpy(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_decrease, lr_rise_niter, lr_decay_niter):
+#     """Update the learning rate according to a schedule.
+#     Args:
+#       lr: Tensor which contains the current learning rate that needs to be updated
+#       intra_phase_step: Step counter representing the number of images processed since the start of the current phase
+#       steps_per_phase: total number of steps in a phase
+#       lr_max: learning rate after increase (and before decrease) segments
+#       lr_increase: type of increase function to use (e.g. None, linear, exponential)
+#       lr_decrease: type of decrease function to use (e.g. None, linear, exponential)
+#       lr_rise_niter: number of iterations over which the increase from the minimum to the maximum value should happen
+#       lr_decay_niter: number of iterations over which the decrease from the maximum to the minumum value should happen.
+#     Returns: an Op that can be passed to session.run to update the learning (lr) Tensor
+#     """
+#     # Is a learning rate schedule defined at all? (otherwise, immediately return a constant)
+#     if not (lr_increase or lr_decrease):
+#         return lr.assign(lr_max)
+#     else:
+#         # Are we in the increasing part?
+#         if intra_phase_step < lr_rise_niter:
+#             if not lr_increase:
+#                 updated_lr = lr_max
+#             elif lr_increase == 'linear':
+#                 updated_lr = (intra_phase_step / lr_rise_niter) * lr_max
+#             elif lr_increase == 'exponential':
+#                 # Define lr at step 0 to be 1% of lr_max
+#                 a = lr_max / 100
+#                 # Make sure then when intra_phase_step = lr_rise_niter, the lr = lr_max
+#                 b = np.log(100 / lr_rise_niter) 
+#                 update_lr = a*np.exp(b*intra_phase_step)  
+#             else:
+#                 raise NotImplementedError("Unsupported learning rate increase type: %s" % lr_increase)
+#         # Are we in the decreasing part?
+#         elif intra_phase_step > (steps_per_phase - lr_decay_niter):
+#             if not lr_decrease:
+#                 updated_lr = lr_max
+#             if lr_decrease == 'linear':
+#                 updated_lr = ((steps_per_phase - intra_phase_step) / lr_decay_niter) * lr_max
+#             elif lr_increase == 'exponential':
+#                 # Define lr at the last step to be 1% of lr_max
+#                 a = lr_max / 100
+#                 # Make sure that when intra_phase_step == steps_per_phase - lr_decay_niter, lr_max is returned
+#                 b = np.log(100 / lr_decay_niter)
+#                 update_lr = a*np.exp(b*(steps_per_phase - intra_phase_step))
+#             else:
+#                 raise NotImplementedError("Unsupported learning rate decrease type: %s" % lr_decrease)
+#         # Are we in the flat part?
+#         else:
+#             updated_lr = lr_max
             
-        return lr.assign(updated_lr)
+#         return lr.assign(updated_lr)
 
 
 # log0 only logs from hvd.rank() == 0
