@@ -124,27 +124,8 @@ def optuna_objective(trial, args, config):
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
 
-        g_lr = args.g_lr
-        d_lr = args.d_lr
-        
-        if args.horovod:
-            if args.g_scaling == 'sqrt':
-                g_lr = g_lr * np.sqrt(hvd.size())
-            elif args.g_scaling == 'linear':
-                g_lr = g_lr * hvd.size()
-            elif args.g_scaling == 'none':
-                pass
-            else:
-                raise ValueError(args.g_scaling)
-
-            if args.d_scaling == 'sqrt':
-                d_lr = d_lr * np.sqrt(hvd.size())
-            elif args.d_scaling == 'linear':
-                d_lr = d_lr * hvd.size()
-            elif args.d_scaling == 'none':
-                pass
-            else:
-                raise ValueError(args.d_scaling)
+        # Scale learning rate to compensate for data parallel training, if a scaling strategy is specified
+        g_lr, d_lr = scale_lr(args.g_lr, args.d_lr, args.g_scaling, args.d_scaling, args.horovod)
 
         d_lr = tf.Variable(d_lr, name='d_lr', dtype=tf.float32)
         g_lr = tf.Variable(g_lr, name='g_lr', dtype=tf.float32)
