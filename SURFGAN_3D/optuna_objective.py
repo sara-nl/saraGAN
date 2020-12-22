@@ -105,12 +105,6 @@ def optuna_objective(trial, args, config):
         # Get NumpyPathDataset object for current phase. It's an iterable object that returns the path to samples in the dataset
         npy_data = get_numpy_dataset(phase, args.starting_phase, args.start_shape, args.dataset_path, args.scratch_path, verbose)
 
-        # # dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
-        # dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
-
-        # Use optuna to explore the base_batch_size. We sample the exponent, so that we sample from (1, 2, 4, 8, ..., 1024)
-        # args.base_batch_size = 2 ** trial.suggest_int('base_batch_size_exponent', 1, 6)
-
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
 
@@ -121,113 +115,18 @@ def optuna_objective(trial, args, config):
 
         # Num_metric_samples is the amount of samples the metric is calculated on.
         # If it is not set explicitely, we use the same as the global batch size, but never less than 2 per worker (1 per worker potentially makes some metrics crash)
-        if not args.num_metric_samples:
-            if batch_size > 1:
-                num_metric_samples = batch_size * global_size
-            else:
-                num_metric_samples = 2 * global_size
-        else:
-            num_metric_samples = args.num_metric_samples
+        num_metric_samples = get_num_metric_samples(args.num_metric_samples, batch_size, global_size)
 
-        # if args.horovod:
-        #     dataset.shard(hvd.size(), hvd.rank())
-        #
-        # def load(x):
-        #     x = np.load(x.decode())[np.newaxis, ...].astype(np.float32) / 1024 - 1
-        #     return x
-        #
-        # if args.gpu:
-        #     parallel_calls = AUTOTUNE
-        # else:
-        #     parallel_calls = int(os.environ['OMP_NUM_THREADS'])
-        #
-        # dataset = dataset.shuffle(len(npy_data))
-        # dataset = dataset.map(lambda x: tuple(tf.py_func(load, [x], [tf.float32])), num_parallel_calls=parallel_calls)
-        # dataset = dataset.batch(batch_size, drop_remainder=True)
-        # dataset = dataset.repeat()
-        # dataset = dataset.prefetch(AUTOTUNE)
-        # dataset = dataset.make_one_shot_iterator()
-        # data = dataset.get_next()
-        # if len(data) == 1:
-        #     real_image_input = data
-        #     real_label = None
-        # elif len(data) == 2:
-        #     real_image_input, real_label = data
-        # else:
-        #     raise NotImplementedError()
-
-#zdim_base = max(1, final_shape[1] // (2 ** num_phases))
-        current_shape = [batch_size, image_channels, *[size * 2 ** (phase - 1) for size in
-                                                       base_shape[1:]]]
-        if verbose:
-            print(f'base_shape: {base_shape}, current_shape: {current_shape}')
-        real_image_input = tf.placeholder(shape=current_shape, dtype=tf.float32)
-
-        # real_image_input = tf.random.normal([1, batch_size, image_channels, *[size * 2 ** (phase -
-        #                                                                                  1) for size in base_shape[1:]]])
-        # real_image_input = tf.squeeze(real_image_input, axis=0)
-        # real_image_input = tf.ensure_shape(real_image_input, [batch_size, image_channels, *[size * 2 ** (phase - 1) for size in base_shape[1:]]])
-        real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * .01
-        real_label = None
-
-        if real_label is not None:
-            real_label = tf.one_hot(real_label, depth=args.num_labels)
+        # Create input tensor, and add some noise to make training more robust against input noise
+        real_image_input = tf.placeholder(shape=get_current_input_shape(phase, batch_size, args.start_shape), dtype=tf.float32)
+        real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * args.noise_stddev
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
 
-        # # Use optuna for LR, overwrite original args
-        # args.g_lr = trial.suggest_loguniform('generator_LR', 1e-6, 1e-2)
-        # args.d_lr = trial.suggest_loguniform('discriminator_LR', 1e-6, 1e-2)
-
-        # # Use optuna for LR schedules. Predefine some schedules, as not all make sense
-        # lr_schedule = [
-        #     {'lr_sched': None, 'lr_fract': 0.5},
-        #     {'lr_sched': 'linear', 'lr_fract': 0.125},
-        #     {'lr_sched': 'linear', 'lr_fract': 0.25},
-        #     {'lr_sched': 'linear', 'lr_fract': 0.375},
-        #     {'lr_sched': 'linear', 'lr_fract': 0.5},
-        #     {'lr_sched': 'exponential', 'lr_fract': 0.125},
-        #     {'lr_sched': 'exponential', 'lr_fract': 0.25},
-        #     {'lr_sched': 'exponential', 'lr_fract': 0.375},
-        #     {'lr_sched': 'exponential', 'lr_fract': 0.5},
-        # ]
-
-        # # d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', lr_schedule)
-        # # d_lr_sched_dec = trial.suggest_categorical('d_lr_sched_dec', lr_schedule)
-        # # g_lr_sched_inc = trial.suggest_categorical('g_lr_sched_inc', lr_schedule)
-        # # g_lr_sched_dec = trial.suggest_categorical('g_lr_sched_dec', lr_schedule)
-
-        # # args.g_lr_increase = lr_schedule[g_lr_sched_inc]['lr_sched']
-        # # args.g_lr_decrease = lr_schedule[g_lr_sched_dec]['lr_sched']
-        # # args.d_lr_increase = lr_schedule[d_lr_sched_inc]['lr_sched']
-        # # args.d_lr_decrease = lr_schedule[d_lr_sched_dec]['lr_sched']
-
-        # # args.g_lr_rise_niter = np.ceil(lr_schedule[g_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
-        # # args.g_lr_dec_niter = np.ceil(lr_schedule[g_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
-        # # args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
-        # # args.d_lr_dec_niter = np.ceil(lr_schedule[d_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
-
-        # d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
-        # d_lr_sched_dec = trial.suggest_categorical('d_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
-        # g_lr_sched_inc = trial.suggest_categorical('g_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
-        # g_lr_sched_dec = trial.suggest_categorical('g_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
-
-        # args.g_lr_increase = lr_schedule[g_lr_sched_inc]['lr_sched']
-        # args.g_lr_decrease = lr_schedule[g_lr_sched_dec]['lr_sched']
-        # args.d_lr_increase = lr_schedule[d_lr_sched_inc]['lr_sched']
-        # args.d_lr_decrease = lr_schedule[d_lr_sched_dec]['lr_sched']
-
-        # args.g_lr_rise_niter = np.ceil(lr_schedule[g_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
-        # args.g_lr_dec_niter = np.ceil(lr_schedule[g_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
-        # args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
-        # args.d_lr_dec_niter = np.ceil(lr_schedule[d_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
-
-
         g_lr = args.g_lr
         d_lr = args.d_lr
         
-
         if args.horovod:
             if args.g_scaling == 'sqrt':
                 g_lr = g_lr * np.sqrt(hvd.size())
