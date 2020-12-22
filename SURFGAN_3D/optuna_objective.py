@@ -10,6 +10,8 @@ import random
 
 from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
+from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
+from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape
 # from mpi4py import MPI
 import os
 import importlib
@@ -26,35 +28,22 @@ from metrics.save_metrics import save_metrics
 
 def optuna_objective(trial, args, config):
 
-    # Create dictionary of metrics to compute
-    compute_metrics = {
-        'compute_FID': args.compute_FID,
-        'compute_swds': args.compute_swds,
-        'compute_ssims': args.compute_ssims,
-        'compute_psnrs': args.compute_psnrs,
-        'compute_mses': args.compute_mses,
-        'compute_nrmses': args.compute_nrmses,
-    }
-
     discriminator = importlib.import_module(f'networks.{args.architecture}.discriminator').discriminator
     generator = importlib.import_module(f'networks.{args.architecture}.generator').generator
 
     # Store the last fid so that it can be returned to optuna
     last_fid = None
 
+    # Set verbosity:
+    verbose = get_verbosity(args.horovod, args.optuna_distributed)
+    if not verbose:
+        tf.get_logger().setLevel(logging.ERROR) # Only errors if rank != 0
+
+    # set world size
     if args.horovod:
-        verbose = hvd.rank() == 0
         global_size = hvd.size()
-        global_rank = hvd.rank()
-        local_rank = hvd.local_rank()
-        # Print warnings only for Rank 0, others only print errors:
-        if not verbose:
-            tf.get_logger().setLevel(logging.ERROR)
     else:
-        verbose = True
         global_size = 1
-        global_rank = 0
-        local_rank = 0
 
     if args.logdir is not None:
         logdir = args.logdir
@@ -125,7 +114,7 @@ def optuna_objective(trial, args, config):
         data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
         if verbose:
             print(f'Phase {phase}: reading data from dir {data_path}')
-        npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=local_rank == 0,
+        npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0,
                                     is_correct_phase=phase >= args.starting_phase)
 
         # # dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
@@ -639,7 +628,7 @@ def optuna_objective(trial, args, config):
                     if args.calc_metrics:
                         # if verbose:
                             # print('Computing and writing metrics...')
-                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, compute_metrics, num_metric_samples, verbose)
+                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
@@ -766,7 +755,7 @@ def optuna_objective(trial, args, config):
                 if metrics_summary_bool:
                     if args.calc_metrics:
                         # print('Computing and writing metrics')
-                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, compute_metrics, num_metric_samples, verbose)
+                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
