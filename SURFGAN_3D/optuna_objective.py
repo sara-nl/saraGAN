@@ -8,7 +8,6 @@ import random
 # import optuna
 # # from signal import signal, SIGSEGV
 
-from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
 from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape
@@ -110,7 +109,7 @@ def optuna_objective(trial, args, config):
         # dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
 
         # Use optuna to explore the base_batch_size. We sample the exponent, so that we sample from (1, 2, 4, 8, ..., 1024)
-        args.base_batch_size = 2 ** trial.suggest_int('base_batch_size_exponent', 1, 6)
+        # args.base_batch_size = 2 ** trial.suggest_int('base_batch_size_exponent', 1, 6)
 
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
@@ -177,52 +176,52 @@ def optuna_objective(trial, args, config):
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
 
-        # Use optuna for LR, overwrite original args
-        args.g_lr = trial.suggest_loguniform('generator_LR', 1e-6, 1e-2)
-        args.d_lr = trial.suggest_loguniform('discriminator_LR', 1e-6, 1e-2)
+        # # Use optuna for LR, overwrite original args
+        # args.g_lr = trial.suggest_loguniform('generator_LR', 1e-6, 1e-2)
+        # args.d_lr = trial.suggest_loguniform('discriminator_LR', 1e-6, 1e-2)
 
-        # Use optuna for LR schedules. Predefine some schedules, as not all make sense
-        lr_schedule = [
-            {'lr_sched': None, 'lr_fract': 0.5},
-            {'lr_sched': 'linear', 'lr_fract': 0.125},
-            {'lr_sched': 'linear', 'lr_fract': 0.25},
-            {'lr_sched': 'linear', 'lr_fract': 0.375},
-            {'lr_sched': 'linear', 'lr_fract': 0.5},
-            {'lr_sched': 'exponential', 'lr_fract': 0.125},
-            {'lr_sched': 'exponential', 'lr_fract': 0.25},
-            {'lr_sched': 'exponential', 'lr_fract': 0.375},
-            {'lr_sched': 'exponential', 'lr_fract': 0.5},
-        ]
+        # # Use optuna for LR schedules. Predefine some schedules, as not all make sense
+        # lr_schedule = [
+        #     {'lr_sched': None, 'lr_fract': 0.5},
+        #     {'lr_sched': 'linear', 'lr_fract': 0.125},
+        #     {'lr_sched': 'linear', 'lr_fract': 0.25},
+        #     {'lr_sched': 'linear', 'lr_fract': 0.375},
+        #     {'lr_sched': 'linear', 'lr_fract': 0.5},
+        #     {'lr_sched': 'exponential', 'lr_fract': 0.125},
+        #     {'lr_sched': 'exponential', 'lr_fract': 0.25},
+        #     {'lr_sched': 'exponential', 'lr_fract': 0.375},
+        #     {'lr_sched': 'exponential', 'lr_fract': 0.5},
+        # ]
 
-        # d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', lr_schedule)
-        # d_lr_sched_dec = trial.suggest_categorical('d_lr_sched_dec', lr_schedule)
-        # g_lr_sched_inc = trial.suggest_categorical('g_lr_sched_inc', lr_schedule)
-        # g_lr_sched_dec = trial.suggest_categorical('g_lr_sched_dec', lr_schedule)
+        # # d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', lr_schedule)
+        # # d_lr_sched_dec = trial.suggest_categorical('d_lr_sched_dec', lr_schedule)
+        # # g_lr_sched_inc = trial.suggest_categorical('g_lr_sched_inc', lr_schedule)
+        # # g_lr_sched_dec = trial.suggest_categorical('g_lr_sched_dec', lr_schedule)
+
+        # # args.g_lr_increase = lr_schedule[g_lr_sched_inc]['lr_sched']
+        # # args.g_lr_decrease = lr_schedule[g_lr_sched_dec]['lr_sched']
+        # # args.d_lr_increase = lr_schedule[d_lr_sched_inc]['lr_sched']
+        # # args.d_lr_decrease = lr_schedule[d_lr_sched_dec]['lr_sched']
+
+        # # args.g_lr_rise_niter = np.ceil(lr_schedule[g_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
+        # # args.g_lr_dec_niter = np.ceil(lr_schedule[g_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
+        # # args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
+        # # args.d_lr_dec_niter = np.ceil(lr_schedule[d_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
+
+        # d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
+        # d_lr_sched_dec = trial.suggest_categorical('d_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
+        # g_lr_sched_inc = trial.suggest_categorical('g_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
+        # g_lr_sched_dec = trial.suggest_categorical('g_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
 
         # args.g_lr_increase = lr_schedule[g_lr_sched_inc]['lr_sched']
         # args.g_lr_decrease = lr_schedule[g_lr_sched_dec]['lr_sched']
         # args.d_lr_increase = lr_schedule[d_lr_sched_inc]['lr_sched']
         # args.d_lr_decrease = lr_schedule[d_lr_sched_dec]['lr_sched']
 
-        # args.g_lr_rise_niter = np.ceil(lr_schedule[g_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
-        # args.g_lr_dec_niter = np.ceil(lr_schedule[g_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
-        # args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
-        # args.d_lr_dec_niter = np.ceil(lr_schedule[d_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg))
-
-        d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
-        d_lr_sched_dec = trial.suggest_categorical('d_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
-        g_lr_sched_inc = trial.suggest_categorical('g_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
-        g_lr_sched_dec = trial.suggest_categorical('g_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
-
-        args.g_lr_increase = lr_schedule[g_lr_sched_inc]['lr_sched']
-        args.g_lr_decrease = lr_schedule[g_lr_sched_dec]['lr_sched']
-        args.d_lr_increase = lr_schedule[d_lr_sched_inc]['lr_sched']
-        args.d_lr_decrease = lr_schedule[d_lr_sched_dec]['lr_sched']
-
-        args.g_lr_rise_niter = np.ceil(lr_schedule[g_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
-        args.g_lr_dec_niter = np.ceil(lr_schedule[g_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
-        args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
-        args.d_lr_dec_niter = np.ceil(lr_schedule[d_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
+        # args.g_lr_rise_niter = np.ceil(lr_schedule[g_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
+        # args.g_lr_dec_niter = np.ceil(lr_schedule[g_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
+        # args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
+        # args.d_lr_dec_niter = np.ceil(lr_schedule[d_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
 
 
         g_lr = args.g_lr
