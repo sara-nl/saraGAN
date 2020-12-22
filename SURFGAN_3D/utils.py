@@ -6,6 +6,8 @@ from multiprocessing import Pool
 import os
 import horovod.tensorflow as hvd
 
+from dataset import NumpyPathDataset
+
 def scale_lr(g_lr, d_lr, g_scaling, d_scaling, horovod):
     """Scales the learning rates if horovod is used.
     Parameters:

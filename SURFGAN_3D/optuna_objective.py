@@ -103,11 +103,8 @@ def optuna_objective(trial, args, config):
 
         size = start_resolution * (2 ** (phase - 1))
 
-        data_path = os.path.join(args.dataset_path, f'{size}x{size}/')
-        if verbose:
-            print(f'Phase {phase}: reading data from dir {data_path}')
-        npy_data = NumpyPathDataset(data_path, args.scratch_path, copy_files=hvd.local_rank() == 0,
-                                    is_correct_phase=phase >= args.starting_phase)
+        # Get NumpyPathDataset object for current phase. It's an iterable object that returns the path to samples in the dataset
+        npy_data = get_numpy_dataset(phase, args.starting_phase, args.start_shape, args.dataset_path, args.scratch_path, verbose)
 
         # # dataset = tf.data.Dataset.from_generator(npy_data.__iter__, npy_data.dtype, npy_data.shape)
         # dataset = tf.data.Dataset.from_tensor_slices(npy_data.scratch_files)
