@@ -25,7 +25,7 @@ from networks.loss import forward_simultaneous, forward_generator, forward_discr
 
 from metrics.save_metrics import save_metrics
 
-
+import networks as nw
 
 def optuna_objective(trial, args, config):
 
@@ -172,17 +172,10 @@ def optuna_objective(trial, args, config):
 
         with tf.variable_scope('alpha'):
             alpha = tf.Variable(1, name='alpha', dtype=tf.float32)
-            # Alpha init
-            init_alpha = alpha.assign(1)
 
-            # Specify alpha update op for mixing phase.
-            num_steps = args.mixing_nimg // (batch_size * global_size)
-            # This original code produces too large steps when performing a run that is restarted in the middle of the alpha mixing phase:
-            # alpha_update = 1 / num_steps
-            # This code produces a correct step size when restarting (the same step size that would be used if a run wasn't restarted)
-            alpha_update = args.starting_alpha / num_steps
-            # noinspection PyTypeChecker
-            update_alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
+        # Alpha init
+        init_alpha = alpha.assign(1)
+        update_alpha = nw.ops.alpha_update(alpha, args.mixing_nimg, args.starting_alpha, batch_size, global_size)
 
         if args.optim_strategy == 'simultaneous':
             gen_loss, disc_loss, gp_loss, gen_sample = forward_simultaneous(
@@ -369,6 +362,7 @@ def optuna_objective(trial, args, config):
 
         # Other ops
         init_op = tf.global_variables_initializer()
+        # Probably these alpha ops could be with the other ops above, but... it changes reproducibility of my runs. So for now, I'll leave them here.
         assign_starting_alpha = alpha.assign(args.starting_alpha)
         assign_zero = alpha.assign(0)
         broadcast = hvd.broadcast_global_variables(0)
