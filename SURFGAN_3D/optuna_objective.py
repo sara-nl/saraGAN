@@ -12,6 +12,7 @@ from dataset import NumpyPathDataset
 from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
 from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape
+from optuna_suggestions import optuna_override_undefined
 # from mpi4py import MPI
 import os
 import importlib
@@ -26,15 +27,22 @@ from networks.loss import forward_simultaneous, forward_generator, forward_discr
 from metrics.save_metrics import save_metrics
 
 
-def optuna_objective(trial, args, config):
 
-    discriminator = importlib.import_module(f'networks.{args.architecture}.discriminator').discriminator
-    generator = importlib.import_module(f'networks.{args.architecture}.generator').generator
+def optuna_objective(trial, args, config):
 
     # Store the last fid so that it can be returned to optuna
     last_fid = None
 
-    # Set verbosity:
+    # Override args.* that are undefined by optuna's suggest_* calls.
+    # For now, this is limited to overriding learning rate, batch size, and learning rate schedules, but may be expanded in the future (see optuna_suggestions.py)
+    # Note: this means that when restoring from an optuna FrozenTrial, command line parameters take precedence!
+    args = optuna_override_undefined(args, trial)
+
+    # Importing modules by name for the generator and discriminator
+    discriminator = importlib.import_module(f'networks.{args.architecture}.discriminator').discriminator
+    generator = importlib.import_module(f'networks.{args.architecture}.generator').generator
+
+        # Set verbosity:
     verbose = get_verbosity(args.horovod, args.optuna_distributed)
     if not verbose:
         tf.get_logger().setLevel(logging.ERROR) # Only errors if rank != 0
@@ -66,20 +74,13 @@ def optuna_objective(trial, args, config):
     # Define the shape at the base of the network
     base_shape = (image_channels, start_shape[1], start_shape[2], start_shape[3])
 
-    # Number of filters at the base of the progressive network
-    # In other words: at the starting resolution, this is the amount of filters that will be used
+    # Number of filters at the base (= 1st convolutional layer of the generator) of the progressive network
     # In subsequent phases, the number of filters will go down as the resolution goes up.
-#base_dim = num_filters(1, num_phases, base_shape = base_shape, size=args.network_size)
-    # TODO: DON'T HARDCODE BASEDIM (testing for now...)
-    # With more than 256 filters, the dense connection between the latent space and first filters has too many parameters if you start with e.g. a latent vector of 16x16x10=2560 elements
     base_dim = args.first_conv_nfilters
 
     if verbose:
-        print(f"Start resolution: {start_resolution}")
-        print(f"Final resolution: {final_resolution}")
         print(f"Deduced number of phases: {num_phases}")
         print(f"base_dim: {base_dim}")
-        print(f"WARNING: base_dim hardcoded! Should be changed into e.g. an argument")
 
     var_list = list()
     global_step = 0
