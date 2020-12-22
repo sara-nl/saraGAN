@@ -45,13 +45,14 @@ def optuna_objective(trial, args, config):
     else:
         global_size = 1
 
-    if args.logdir is not None:
-        logdir = args.logdir
-    else:
-        timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
-        logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
+    # Get logging directory based on the args. If args.logdir is not set, a logdir is created
+    logdir = get_logdir(args)
+    # Returns a tf.FileWriter, but only for rank 0 if the training uses multiple MPI ranks
+    writer = get_filewriter(logdir, verbose)
 
+    # Allow GPU memory growth
     os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
+
     if verbose:
         writer = tf.summary.FileWriter(logdir=logdir)
         print("Arguments passed:")
