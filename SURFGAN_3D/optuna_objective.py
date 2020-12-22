@@ -100,7 +100,7 @@ def optuna_objective(trial, args, config):
         # ------------------------------------------------------------------------------------------#
         # DATASET
 
-        size = start_resolution * (2 ** (phase - 1))
+        # size = start_resolution * (2 ** (phase - 1))
 
         # Get NumpyPathDataset object for current phase. It's an iterable object that returns the path to samples in the dataset
         npy_data = get_numpy_dataset(phase, args.starting_phase, args.start_shape, args.dataset_path, args.scratch_path, verbose)
@@ -145,15 +145,8 @@ def optuna_objective(trial, args, config):
         # Turn arguments into constant Tensors
         g_lr_max = tf.constant(args.d_lr, tf.float32)
         d_lr_max = tf.constant(args.g_lr, tf.float32)
-#        g_lr_rise_niter = tf.constant(args.g_lr_rise_niter)
-#        d_lr_rise_niter = tf.constant(args.d_lr_rise_niter)
-#        g_lr_decay_niter = tf.constant(args.g_lr_decay_niter)
-#        d_lr_decay_niter = tf.constant(args.d_lr_decay_niter)
         steps_per_phase = tf.constant(args.mixing_nimg + args.stabilizing_nimg)
 
-#        with tf.control_dependencies([update_intra_phase_step]):
-#            update_g_lr = g_lr.assign(g_lr * args.g_annealing)
-#            update_d_lr = d_lr.assign(d_lr * args.d_annealing)
         update_g_lr = lr_update(lr = g_lr, intra_phase_step = intra_phase_step, 
                                      steps_per_phase = steps_per_phase, lr_max = g_lr_max,
                                      lr_increase = args.g_lr_increase, lr_decrease = args.g_lr_decrease,
@@ -496,7 +489,7 @@ def optuna_objective(trial, args, config):
                     if args.calc_metrics:
                         # if verbose:
                             # print('Computing and writing metrics...')
-                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
+                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
@@ -623,7 +616,7 @@ def optuna_objective(trial, args, config):
                 if metrics_summary_bool:
                     if args.calc_metrics:
                         # print('Computing and writing metrics')
-                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, size, args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
+                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
