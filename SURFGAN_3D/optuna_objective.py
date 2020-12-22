@@ -61,31 +61,18 @@ def optuna_objective(trial, args, config):
     # Allow GPU memory growth
     os.environ['TF_FORCE_GPU_ALLOW_GROWTH'] = 'true'
 
-    # Get starting & final resolutions
-    start_shape = parse_tuple(args.start_shape)
-    start_resolution = start_shape[-1]
-    final_shape = parse_tuple(args.final_shape)
-    image_channels = final_shape[0]
-    final_resolution = final_shape[-1]
-
-    # Number of phases required to get from the starting resolution to the final resolution
-    num_phases = int(np.log2(final_resolution/start_resolution))
-
-    # Define the shape at the base of the network
-    base_shape = (image_channels, start_shape[1], start_shape[2], start_shape[3])
-
     # Number of filters at the base (= 1st convolutional layer of the generator) of the progressive network
     # In subsequent phases, the number of filters will go down as the resolution goes up.
     base_dim = args.first_conv_nfilters
 
     if verbose:
-        print(f"Deduced number of phases: {num_phases}")
+        print(f"Deduced number of phases: {get_num_phases(args.start_shape, args.final_shape)}")
         print(f"base_dim: {base_dim}")
 
     var_list = list()
     global_step = 0
 
-    for phase in range(1, num_phases + 1):
+    for phase in range(1, get_num_phases(args.start_shape, args.final_shape) + 1):
 
         tf.reset_default_graph()
         # Random seeds need to be reinitialized after a reset_default_graph (at least for TF, but I guess resetting all is good)
@@ -178,7 +165,7 @@ def optuna_objective(trial, args, config):
         init_alpha = alpha.assign(1)
         update_alpha = nw.ops.alpha_update(alpha, args.mixing_nimg, args.starting_alpha, batch_size, global_size)
 
-# Performs a forward pass, computes gradients, clips them (if desired), and then applies them.
+        # Performs a forward pass, computes gradients, clips them (if desired), and then applies them.
         # Supports simultaneous forward pass of generator and discriminator, or alternatingly (discriminator first)
         train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm = opt.optimize_step(
             optimizer_gen,
@@ -206,14 +193,12 @@ def optuna_objective(trial, args, config):
             print(f"Generator parameters: {count_parameters('generator')}")
             print(f"Discriminator parameters:: {count_parameters('discriminator')}")
 
-        # train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)
-        # train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
-
+        # Create an exponential moving average of generator weights. We update this every step.
         gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
         ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
         ema_op = ema.apply(gen_vars)
-        # Transfer EMA values to original variables
+        # After training has completed, we copy the EMA weights to the generator using the following op (before saving the generator model).
         ema_update_weights = tf.group(
             [tf.assign(var, ema.average(var)) for var in gen_vars])
 
