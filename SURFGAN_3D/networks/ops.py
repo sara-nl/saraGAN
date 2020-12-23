@@ -13,9 +13,13 @@ def alpha_update(alpha, mixing_nimg, starting_alpha, batch_size, global_size):
     """
 
     # Specify alpha update op for mixing phase.
-    num_steps = mixing_nimg // (batch_size * global_size)
-    alpha_update = starting_alpha / num_steps
-    alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
+    # If there are zero mixing steps (e.g. when resuming at the start of the stabilization phase), simply assign 0:
+    if mixing_nimg == 0:
+        alpha = alpha.assign(0)
+    else:
+        num_steps = mixing_nimg // (batch_size * global_size)
+        alpha_update = starting_alpha / num_steps
+        alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
     return alpha
 
 def k(x):
