@@ -10,7 +10,7 @@ import random
 
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
-from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape
+from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables
 from optuna_suggestions import optuna_override_undefined
 # from mpi4py import MPI
 import os
@@ -240,31 +240,20 @@ def optuna_objective(trial, args, config):
             #     assert tf.test.is_gpu_available(cuda_only=False, min_cuda_compute_capability=None)
             # sess.graph.finalize()
             sess.run(init_op)
-
-            trainable_variable_names = [v.name for v in tf.trainable_variables()]
-
-            if var_list is not None and phase > args.starting_phase:
-                print("Restoring variables from:", os.path.join(logdir, f'model_{phase - 1}'))
-                var_names = [v.name for v in var_list]
-                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
-                saver = tf.train.Saver(load_vars)
-                saver.restore(sess, os.path.join(logdir, f'model_{phase - 1}'))
-                print("Variables restored!")
-            elif var_list is not None and args.continue_path and phase == args.starting_phase:
-                print("Restoring variables from:", args.continue_path)
-                var_names = [v.name for v in var_list]
-                load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
-                saver = tf.train.Saver(load_vars)
-                saver.restore(sess, os.path.join(args.continue_path))
-                print("Variables restored!")
+            
+            # Do variables need to be restored? (either from the previous phase, or from a previous run)
+            if (phase > args.starting_phase) or (args.continue_path and phase == args.starting_phase):
+                restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, var_list, verbose)
             else:
                 if verbose:
-                     print("Not restoring variables.")
-                     print("Variable List Length:", len(var_list))
-                     writer.add_graph(sess.graph)
+                    print("Not restoring variables.")
+                    writer.add_graph(sess.graph)
 
+            # Store the variable list in this phase. This is the list that needs to be loaded in the next phase.
+            # That way, only the newly added layers will have randomly initialized weights, while the other layers will get their weights set by the restore_variables function.
             var_list = gen_vars + disc_vars
 
+            # If we haven't reached the starting phase, simply continue with the next loop iterations
             if phase < args.starting_phase:
                 continue
 

@@ -8,6 +8,34 @@ import horovod.tensorflow as hvd
 
 from dataset import NumpyPathDataset
 
+def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_list, verbose):
+    """Restores variables either from a previous checkpoint, or from the previous phase.
+    Parameters:
+        sess: tf.session to restore the variables with
+        phase: current phase
+        starting_phase: starting phase of the training.
+        logdir: current logging directory, where checkpoints per phase are stored.
+        continue_path: path to a model checkpoint. If the phase is the starting phase, this model checkpoint is used to restore variables
+        verbose: should output be printed
+    Returns:
+        None
+    """
+    restore_path = None
+    if phase > starting_phase:
+        restore_path = os.path.join(logdir, f'model_{phase - 1}')
+    elif continue_path and phase == starting_phase:
+        restore_path = continue_path
+    if verbose:
+        print("Restoring variables from:", restore_path)
+    var_names = [v.name for v in var_list]
+    trainable_variable_names = [v.name for v in tf.trainable_variables()]
+    load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
+    print(f"load_vars: {load_vars}")
+    saver = tf.train.Saver(load_vars)
+    saver.restore(sess, restore_path)
+    if verbose:
+        print("Variables restored!")
+
 def scale_lr(g_lr, d_lr, g_scaling, d_scaling, horovod):
     """Scales the learning rates if horovod is used.
     Parameters:
@@ -162,78 +190,7 @@ def get_compute_metrics_dict(args):
     
     return compute_metrics
 
-# Op to update the learning rate according to a schedule
-def lr_update(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_decrease, lr_rise_niter, lr_decay_niter):
-    """Update the learning rate according to a schedule.
-    Args:
-      lr: Tensor which contains the current learning rate that needs to be updated
-      intra_phase_step: Step counter representing the number of images processed since the start of the current phase
-      steps_per_phase: total number of steps in a phase
-      lr_max: learning rate after increase (and before decrease) segments
-      lr_increase: type of increase function to use (e.g. None, linear, exponential)
-      lr_decrease: type of decrease function to use (e.g. None, linear, exponential)
-      lr_rise_niter: number of iterations over which the increase from the minimum to the maximum value should happen
-      lr_decay_niter: number of iterations over which the decrease from the maximum to the minumum value should happen.
-    Returns: an Op that can be passed to session.run to update the learning (lr) Tensor
-    """
 
-    # Default starting point is that update_lr = lr_max. If there are no lr_increase or lr_decrease
-    # functions specified, it stays like this.
-    lr_update = lr_max
-
-    # Is a learning rate schedule defined at all? (otherwise, immediately return a constant)
-    if (lr_increase or lr_decrease):
-        # Rather than if-else statements, the way to define a piecewiese function is through tf.cond
-
-        # Prepare some variables:
-        a = tf.cast(tf.math.divide(lr_max, 100), tf.float32)
-        b_rise = tf.cast(tf.math.divide(np.log(100), lr_rise_niter), tf.float32)
-        b_decay = tf.cast(tf.math.divide(np.log(100), lr_decay_niter), tf.float32)
-        step_decay_start = tf.subtract(steps_per_phase, lr_decay_niter)
-        remaining_steps = tf.subtract(steps_per_phase, intra_phase_step)
-
-        # Define the different functions
-        def update_increase_lin ():
-            return tf.multiply(
-                               tf.cast(tf.truediv(intra_phase_step, lr_rise_niter), tf.float32),
-                               lr_max
-                               )
-        def update_increase_exp():
-            return tf.multiply(
-                                a,
-                                tf.math.exp(tf.multiply(b_rise, tf.cast(intra_phase_step, tf.float32)))
-                                )
-
-        def update_decrease_lin():
-            return tf.multiply(
-                               tf.cast(tf.truediv(remaining_steps, lr_decay_niter), tf.float32),
-                               lr_max
-                               )
-
-        def update_decrease_exp():
-            return tf.multiply(
-                                a,
-                                tf.math.exp(tf.multiply(b_decay, tf.cast(remaining_steps, tf.float32)))
-                                )
-
-        def no_op():
-            return lr_update
-
-        if lr_increase == 'linear':
-            # Are we in the increasing part? Return update_increase_lin function (else, keep update_lr unchanged)
-            lr_update = tf.cond(intra_phase_step < lr_rise_niter, update_increase_lin, no_op)
-        elif lr_increase == 'exponential':
-            # Are we in the increasing part? Return update_increase_exp function (else, keep update_lr unchanged)
-            lr_update = tf.cond(intra_phase_step < lr_rise_niter, update_increase_exp, no_op)
-            
-        if lr_decrease == 'linear':
-            # Are we in the decreasing part? Return return update_decrease function (else, keep update_lr unchanged)
-            lr_update = tf.cond(intra_phase_step > step_decay_start, update_decrease_lin, no_op) 
-        elif lr_decrease == 'exponential':
-            # Are we in the decreasing part? Return return update_decrease function (else, keep update_lr unchanged)
-            lr_update = tf.cond(intra_phase_step > step_decay_start, update_decrease_exp, no_op) 
- 
-    return lr.assign(lr_update)
 
 # # Op to update the learning rate according to a schedule
 # def lr_update_numpy(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_decrease, lr_rise_niter, lr_decay_niter):
