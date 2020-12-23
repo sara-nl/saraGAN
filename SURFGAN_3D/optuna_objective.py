@@ -10,7 +10,7 @@ import random
 
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
-from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables
+from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables, print_summary_to_stdout
 from optuna_suggestions import optuna_override_undefined
 # from mpi4py import MPI
 import os
@@ -92,6 +92,7 @@ def optuna_objective(trial, args, config):
 
         # Get NumpyPathDataset object for current phase. It's an iterable object that returns the path to samples in the dataset
         npy_data = get_numpy_dataset(phase, args.starting_phase, args.start_shape, args.dataset_path, args.scratch_path, verbose)
+        # TODO: we should probably split the npy_data in a train and validation set. The validation set can then be passed to save_metrics to compute the metrics on.
 
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
@@ -279,12 +280,21 @@ def optuna_objective(trial, args, config):
             else:
                 print(f"Trial: {trial.number}, Parameters: {trial.params}")
 
+            # ------------------------------------------------------------------------------------------#
+            # Training loop for mixing phase
+
+            # Are we in the mixing phase?
+            mixing_bool = True
+
             while True:
                 start = time.time()
 
                 # Update learning rate
                 d_lr_val = sess.run(update_d_lr)
                 g_lr_val = sess.run(update_g_lr)
+
+                if not mixing_bool:
+                    assert alpha.eval() == 0
 
                 if global_step % args.checkpoint_every_nsteps < (batch_size*global_size) and local_step > 0:
                     if args.horovod:
@@ -360,40 +370,7 @@ def optuna_objective(trial, args, config):
                         writer.add_summary(summary_s, global_step)
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
-                    # memory_percentage = psutil.Process(os.getpid()).memory_percent()
-                    # if not args.gpu:
-                    #     memory_percentage = psutil.Process(os.getpid()).memory_percent()
-                    # else:
-                    #     memory_percentage = nvgpu.gpu_info()[local_rank]['mem_used_percent']
-
-
-                    # writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
-                    #                    global_step)
-                    current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
-                    # print(f"{current_time} \t"
-                    #       f"Step {global_step:09} \t"
-                    #       f"Step(phase) {in_phase_step:09} \t"
-                    #       f"img/s {img_s:.2f} \t "
-                    #       f"img/s/worker {local_img_s:.3f} \t"
-                    #       f"d_loss {d_loss:.4f} \t "
-                    #       f"g_loss {g_loss:.4f} \t "
-                    #       f"d_lr {d_lr_val:.5f} \t"
-                    #       f"g_lr {g_lr_val:.5f} \t"
-                    #       # f"memory {memory_percentage:.4f} % \t"
-                    #       f"alpha {alpha.eval():.2f}")
-
-                #     # if take_first_snapshot:
-                #     #     import tracemalloc
-                #     #     tracemalloc.start()
-                #     #     snapshot_first = tracemalloc.take_snapshot()
-                #     #     take_first_snapshot = False
-
-                #     # snapshot = tracemalloc.take_snapshot()
-                #     # top_stats = snapshot.compare_to(snapshot_first, 'lineno')
-                #     # print("[ Top 10 differences ]")
-                #     # for stat in top_stats[:10]:
-                #     #     print(stat)
-                #     # snapshot_prev = snapshot
+                    # print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha)
 
                 if global_step >= ((phase - args.starting_phase)
                                    * (args.mixing_nimg + args.stabilizing_nimg)
@@ -409,6 +386,9 @@ def optuna_objective(trial, args, config):
                 print(f"Begin stabilizing epochs in phase {phase}")
 
             sess.run(assign_zero)
+
+            # ------------------------------------------------------------------------------------------#
+            # Training loop for stabilizing phase
 
             while True:
                 start = time.time()

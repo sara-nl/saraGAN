@@ -5,8 +5,36 @@ import ast
 from multiprocessing import Pool
 import os
 import horovod.tensorflow as hvd
+import time
 
 from dataset import NumpyPathDataset
+
+def print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha):
+    """Print some summary statistics to stdout.
+    Parameters:
+        global_step: global step counter. Counts how many images have been seen by all workers together.
+        in_phase_step: step counter that gets reset every phase. This shows the progress within a phase.
+        img_s: global number of images that gets processed per second (over all workers)
+        local_img_s: number of images that got processed per second by this worker
+        d_loss: discriminator loss
+        g_loss: generator loss
+        d_lr_val: discriminator learning rate
+        g_lr_val: generator learning rate
+        alpha: current value of alpha
+    """
+
+    current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
+    print(f"{current_time} \t"
+            f"Step {global_step:09} \t"
+            f"Step(phase) {in_phase_step:09} \t"
+            f"img/s {img_s:.2f} \t "
+            f"img/s/worker {local_img_s:.3f} \t"
+            f"d_loss {d_loss:.4f} \t "
+            f"g_loss {g_loss:.4f} \t "
+            f"d_lr {d_lr_val:.5f} \t"
+            f"g_lr {g_lr_val:.5f} \t"
+            # f"memory {memory_percentage:.4f} % \t"
+            f"alpha {alpha.eval():.2f}")
 
 def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_list, verbose):
     """Restores variables either from a previous checkpoint, or from the previous phase.
