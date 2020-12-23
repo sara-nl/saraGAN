@@ -283,8 +283,9 @@ def optuna_objective(trial, args, config):
             # ------------------------------------------------------------------------------------------#
             # Training loop for mixing phase
 
-            # Are we in the mixing phase?
-            mixing_bool = True
+            # Do we start with a mixing phase? (normally we do, unless we resume e.g. from a point in the stabilization phase)
+            if args.mixing_nimg > 0:
+                mixing_bool = True
 
             while True:
                 start = time.time()
@@ -340,7 +341,9 @@ def optuna_objective(trial, args, config):
                 local_img_s = batch_size / (end - start)
                 img_s = global_size * local_img_s
 
-                sess.run(update_alpha)
+                if mixing_bool:
+                    sess.run(update_alpha)
+
                 sess.run(ema_op)
                 in_phase_step = sess.run(update_intra_phase_step)
 
@@ -350,6 +353,13 @@ def optuna_objective(trial, args, config):
                             # print('Computing and writing metrics...')
                         metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
 
+                        # DEBUG:
+                        var = [v for v in tf.trainable_variables() if v.name == "generator/generator_in/dense/weight:0"][0]
+                        var_alpha = [v for v in tf.trainable_variables() if v.name == "alpha/alpha:0"][0]
+                        print(f"generator/generator_in/dense/weight:0: {sess.run(var)[0, 0]}")
+                        print(f"alpha/alpha:0: {sess.run(var_alpha)}")
+
+
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
                         if args.optuna_distributed:
@@ -368,156 +378,26 @@ def optuna_objective(trial, args, config):
                     elif small_summary_bool:
                         print('Writing small summary...')
                         writer.add_summary(summary_s, global_step)
+                        # This summary should really be seperated from the small/large summary writing, since those steps are unusually slow...
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
                     # print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha)
 
-                if global_step >= ((phase - args.starting_phase)
+                # Is only executed once per phase, because the mixing_bool is then flipped to False
+                if mixing_bool and (global_step >= ((phase - args.starting_phase)
                                    * (args.mixing_nimg + args.stabilizing_nimg)
-                                   + args.mixing_nimg):
-                    break
-
-                assert alpha.eval() >= 0
-
-                # if verbose:
-                #     writer.flush()
-
-            if verbose:
-                print(f"Begin stabilizing epochs in phase {phase}")
-
-            sess.run(assign_zero)
-
-            # ------------------------------------------------------------------------------------------#
-            # Training loop for stabilizing phase
-
-            while True:
-                start = time.time()
-
-                # Update learning rate
-                d_lr_val = sess.run(update_d_lr)
-                g_lr_val = sess.run(update_g_lr)
-
-                assert alpha.eval() == 0
-                if global_step % args.checkpoint_every_nsteps == 0 < (batch_size*global_size) and local_step > 0:
-
-                    if args.horovod:
-                        sess.run(broadcast)
-                    saver = tf.train.Saver(var_list)
+                                   + args.mixing_nimg)):
+                    mixing_bool = False
+                    sess.run(assign_zero)
                     if verbose:
-                        print(f'Writing checkpoint file: model_{phase}_ckpt_{global_step}')
-                        saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
+                        print(f"Begin stabilizing epochs in phase {phase}")
 
-                batch_loc = np.random.randint(0, len(npy_data) - batch_size)
-                batch_paths = npy_data[batch_loc: batch_loc + batch_size]
-                batch = np.stack([np.load(path) for path in batch_paths])
-                batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
+                if mixing_bool:
+                    assert alpha.eval() >= 0
 
-                small_summary_bool = (local_step % args.summary_small_every_nsteps == 0)
-                large_summary_bool = (local_step % args.summary_large_every_nsteps == 0)
-                metrics_summary_bool = (local_step % args.metrics_every_nsteps == 0)
-                if large_summary_bool:
-                    _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
-                        [train_gen, train_disc, summary_small, summary_large,
-                        disc_loss, gen_loss], feed_dict={real_image_input: batch}) 
-                elif small_summary_bool:
-                    _, _, summary_s, d_loss, g_loss = sess.run(
-                        [train_gen, train_disc, summary_small,
-                        disc_loss, gen_loss], feed_dict={real_image_input: batch})
-                else:
-                    _, _, d_loss, g_loss = sess.run(
-                        [train_gen, train_disc, disc_loss, gen_loss], 
-                        feed_dict={real_image_input: batch})
-
-#                _, _, d_loss, g_loss = sess.run(
-#                        [train_gen, train_disc, disc_loss, gen_loss],
-#                        feed_dict={real_image_input: batch})
-
-                global_step += batch_size * global_size
-                local_step += 1
-
-                end = time.time()
-                local_img_s = batch_size / (end - start)
-                img_s = global_size * local_img_s
-
-                sess.run(ema_op)
-                in_phase_step = sess.run(update_intra_phase_step)
-
-                if metrics_summary_bool:
-                    if args.calc_metrics:
-                        # print('Computing and writing metrics')
-                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
-
-                        # Optuna pruning and return value:
-                        last_fid = metrics['FID']
-                        if args.optuna_distributed:
-                            print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
-                        else:
-                            print(f"Trial: {trial.number}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
-                        trial.report(metrics['FID'], global_step)
-                        if trial.should_prune():
-                            raise optuna.TrialPruned()
-
-                if verbose:
-
-                    if large_summary_bool:
-                        print('Writing large summary...')
-                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]), global_step)
-                        writer.add_summary(summary_s, global_step)
-                        writer.add_summary(summary_l, global_step)
-                    elif small_summary_bool:
-                        print('Writing small summary...')
-                        writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s',
-                                                                            simple_value   =img_s)]),
-                                        global_step)
-                        writer.add_summary(summary_s, global_step)
-                    # memory_percentage = psutil.Process(os.getpid()).memory_percent()
-                    # if not args.gpu:
-                    #     memory_percentage = psutil.Process(os.getpid()).memory_percent()
-                    # else:
-                    #     gpu_info = nvgpu.gpu_info()
-                    #     memory_percentage = nvgpu.gpu_info()[local_rank]['mem_used_percent']
-
-                    # writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='memory_percentage', simple_value=memory_percentage)]),
-                    #                    global_step)
-                    current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
-                    # print(f"{current_time} \t"
-                    #       f"Step {global_step:09} \t"
-                    #       f"Step(phase) {in_phase_step:09} \t"
-                    #       f"img/s {img_s:.2f} \t "
-                    #       f"img/s/worker {local_img_s:.3f} \t"
-                    #       f"d_loss {d_loss:.4f} \t "
-                    #       f"g_loss {g_loss:.4f} \t "
-                    #       f"d_lr {d_lr_val:.5f} \t"
-                    #       f"g_lr {g_lr_val:.5f} \t"
-                    #       # f"memory {memory_percentage:.4f} % \t"
-                    #       f"alpha {alpha.eval():.2f}")
-
-
-                # if verbose:
-                #     writer.flush()
-
+                # Break out of loop when phase is done
                 if global_step >= (phase - args.starting_phase + 1) * (args.stabilizing_nimg + args.mixing_nimg):
-                    # if verbose:
-                    #     run_metadata = tf.RunMetadata()
-                    #     opts = tf.profiler.ProfileOptionBuilder.float_operation()
-                    #     g = tf.get_default_graph()
-                    #     flops = tf.profiler.profile(g, run_meta=run_metadata, cmd='op', options=opts)
-                    #     writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='graph_flops',
-                    #                                                           simple_value=flops.total_float_ops)]),
-                    #                        global_step)
-                    #
-                    #     # Print memory info.
-                    #     try:
-                    #         print(nvgpu.gpu_info())
-                    #     except subprocess.CalledProcessError:
-                    #         pid = os.getpid()
-                    #         py = psutil.Process(pid)
-                    #         print(f"CPU Percent: {py.cpu_percent()}")
-                    #         print(f"Memory info: {py.memory_info()}")
-
                     break
-
-            
 
             if verbose:
                 print("\n\n\n End of phase.")
