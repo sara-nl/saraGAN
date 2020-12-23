@@ -50,62 +50,62 @@ def optuna_override_undefined(args, trial):
         print(f"args.d_lr = {args.d_lr} (from: command line argument)")
 
     lr_schedule = get_predefined_lr_schedules()
-    if not args.g_lr_increase and not args.g_lr_rise_niter:
+    if args.g_lr_increase is None and args.g_lr_rise_niter is None:
         g_lr_sched_inc = trial.suggest_categorical('g_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
         args.g_lr_increase = lr_schedule[g_lr_sched_inc]['lr_sched']
         args.g_lr_rise_niter = np.ceil(lr_schedule[g_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
         if verbose:
             print(f"args.g_lr_increase = {args.g_lr_increase} (from: optuna trial)")
             print(f"args.g_lr_rise_niter = {args.g_lr_rise_niter} (from: optuna trial)")
-    elif (args.g_lr_increase and not args.g_lr_rise_niter) or (args.g_lr_rise_niter and not args.g_lr_increase):
+    elif (args.g_lr_increase is not None and args.g_lr_rise_niter is None) or (args.g_lr_rise_niter is not None and args.g_lr_increase is None):
         if verbose:
             print("ERROR: either both g_lr_increase and g_lr_rise_niter have to be specified, or neither. You cannot specify only one.")
-            raise NotImplementedError()
+        raise NotImplementedError()
     elif verbose:
         print(f"args.g_lr_increase = {args.g_lr_increase} (from: command line argument)")
         print(f"args.g_lr_rise_niter = {args.g_lr_rise_niter} (from: command line argument)")
     
-    if not args.g_lr_decrease and not args.g_lr_decay_niter:
+    if  args.g_lr_decrease is None and args.g_lr_decay_niter is None:
         g_lr_sched_dec = trial.suggest_categorical('g_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
         args.g_lr_decrease = lr_schedule[g_lr_sched_dec]['lr_sched']
         args.g_lr_decay_niter = np.ceil(lr_schedule[g_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
         if verbose:
             print(f"args.g_lr_decrease = {args.g_lr_decrease} (from: optuna trial)")
             print(f"args.g_lr_decay_niter = {args.g_lr_decay_niter} (from: optuna trial)")
-    elif (args.g_lr_decrease and not args.g_lr_decay_niter) or (args.g_lr_decay_niter and not args.g_lr_decrease):
+    elif (args.g_lr_decrease is not None and args.g_lr_decay_niter is None) or (args.g_lr_decay_niter is not None and args.g_lr_decrease is None):
         if verbose:
             print("ERROR: either both g_lr_decrease and g_lr_decay_niter have to be specified, or neither. You cannot specify only one.")
-            raise NotImplementedError()
+        raise NotImplementedError()
     elif verbose:
         print(f"args.g_lr_decrease = {args.g_lr_decrease} (from: command line argument)")
         print(f"args.g_lr_decay_niter = {args.g_lr_decay_niter} (from: command line argument)")
 
-    if not args.d_lr_increase and not args.d_lr_rise_niter:
+    if args.d_lr_increase is None and not args.d_lr_rise_niter is None:
         d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
         args.d_lr_increase = lr_schedule[d_lr_sched_inc]['lr_sched']
         args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
         if verbose:
             print(f"args.d_lr_increase = {args.d_lr_increase} (from: optuna trial)")
             print(f"args.d_lr_rise_niter = {args.d_lr_rise_niter} (from: optuna trial)")
-    elif (args.d_lr_increase and not args.d_lr_rise_niter) or (args.d_lr_rise_niter and not args.d_lr_increase):
+    elif (args.d_lr_increase is not None and args.d_lr_rise_niter is None) or (args.d_lr_rise_niter is not None and args.d_lr_increase is None):
         if verbose:
             print("ERROR: either both d_lr_increase and d_lr_rise_niter have to be specified, or neither. You cannot specify only one.")
-            raise NotImplementedError()
+        raise NotImplementedError()
     elif verbose:
         print(f"args.d_lr_increase = {args.d_lr_increase} (from: command line argument)")
         print(f"args.d_lr_rise_niter = {args.d_lr_rise_niter} (from: command line argument)")
     
-    if not args.d_lr_decrease and not args.d_lr_decay_niter:
+    if args.d_lr_decrease is None and args.d_lr_decay_niter is None:
         d_lr_sched_dec = trial.suggest_categorical('d_lr_sched_dec', [0, 1, 2, 3, 4, 5, 6, 7, 8])
         args.d_lr_decrease = lr_schedule[d_lr_sched_dec]['lr_sched']
         args.d_lr_decay_niter = np.ceil(lr_schedule[d_lr_sched_dec]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
         if verbose:
             print(f"args.d_lr_decrease = {args.d_lr_decrease} (from: optuna trial)")
             print(f"args.d_lr_decay_niter = {args.d_lr_decay_niter} (from: optuna trial)")
-    elif (args.d_lr_decrease and not args.d_lr_decay_niter) or (args.d_lr_decay_niter and not args.d_lr_decrease):
+    elif (args.d_lr_decrease is not None and args.d_lr_decay_niter is None) or (args.d_lr_decay_niter is not None and args.d_lr_decrease is None):
         if verbose:
             print("ERROR: either both d_lr_decrease and d_lr_decay_niter have to be specified, or neither. You cannot specify only one.")
-            raise NotImplementedError()
+        raise NotImplementedError()
     elif verbose:
         print(f"args.d_lr_decrease = {args.d_lr_decrease} (from: command line argument)")
         print(f"args.d_lr_decay_niter = {args.d_lr_decay_niter} (from: command line argument)")
