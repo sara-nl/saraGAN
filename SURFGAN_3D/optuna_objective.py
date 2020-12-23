@@ -1,27 +1,17 @@
 # # pylint: disable=import-error
-# import argparse
 import numpy as np
 import tensorflow as tf
 import horovod.tensorflow as hvd
 import time
 import random
-# import optuna
-# # from signal import signal, SIGSEGV
 
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
 from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables, print_summary_to_stdout
 from optuna_suggestions import optuna_override_undefined
-# from mpi4py import MPI
 import os
 import importlib
-# from rectified_adam import RAdamOptimizer
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
-# import psutil
-# from networks.ops import num_filters
-# from tensorflow.data.experimental import AUTOTUNE
-# import nvgpu
-# import logging
 
 from metrics.save_metrics import save_metrics
 
@@ -309,6 +299,7 @@ def optuna_objective(trial, args, config):
                         print(f'Writing checkpoint file: model_{phase}_ckpt_{global_step}')
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
+                # TODO: seperate normalization, either here, or do it as part of the creation of the real_image_input tensor. The last is probably faster.
                 #print("Batching...")
                 batch_loc = np.random.randint(0, len(npy_data) - batch_size)
                 batch_paths = npy_data[batch_loc: batch_loc + batch_size]
@@ -318,6 +309,9 @@ def optuna_objective(trial, args, config):
 
                 #sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="readline")
                 #sess = tf_debug.TensorBoardDebugWrapperSession(sess, 'localhost:6789')
+                
+                # Measure speed as often as small_summaries, but one iteration later. This avoids timing the summaries themselves.
+                speed_measurement_bool = ((local_step - 1) % args.summary_small_every_nsteps == 0)
                 small_summary_bool = (local_step % args.summary_small_every_nsteps == 0)
                 large_summary_bool = (local_step % args.summary_large_every_nsteps == 0)
                 metrics_summary_bool = (local_step % args.metrics_every_nsteps == 0)
@@ -353,12 +347,11 @@ def optuna_objective(trial, args, config):
                             # print('Computing and writing metrics...')
                         metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
 
-                        # DEBUG:
-                        var = [v for v in tf.trainable_variables() if v.name == "generator/generator_in/dense/weight:0"][0]
-                        var_alpha = [v for v in tf.trainable_variables() if v.name == "alpha/alpha:0"][0]
-                        print(f"generator/generator_in/dense/weight:0: {sess.run(var)[0, 0]}")
-                        print(f"alpha/alpha:0: {sess.run(var_alpha)}")
-
+                        # DEBUG, allows querying a single weight, to see how it develops:
+                        # var = [v for v in tf.trainable_variables() if v.name == "generator/generator_in/dense/weight:0"][0]
+                        # var_alpha = [v for v in tf.trainable_variables() if v.name == "alpha/alpha:0"][0]
+                        # print(f"generator/generator_in/dense/weight:0: {sess.run(var)[0, 0]}")
+                        # print(f"alpha/alpha:0: {sess.run(var_alpha)}")
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
@@ -378,7 +371,7 @@ def optuna_objective(trial, args, config):
                     elif small_summary_bool:
                         print('Writing small summary...')
                         writer.add_summary(summary_s, global_step)
-                        # This summary should really be seperated from the small/large summary writing, since those steps are unusually slow...
+                    elif speed_measurement_bool:
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
                     # print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha)
@@ -402,7 +395,7 @@ def optuna_objective(trial, args, config):
             if verbose:
                 print("\n\n\n End of phase.")
 
-                # Save Session.
+                # Save Session. First, update the generator with the weights stored in the expontial moving average, then store it.
                 sess.run(ema_update_weights)
                 saver = tf.train.Saver(var_list)
                 print("Writing final checkpoint file: model_{phase}")
