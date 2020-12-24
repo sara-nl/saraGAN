@@ -1,6 +1,27 @@
 import tensorflow as tf
 import numpy as np
 
+def alpha_update(alpha, mixing_nimg, starting_alpha, batch_size, global_size):
+    """Alpha update operation. Will linearly make alpha decrease during the mixing phase, until it is zero at the end of the mixing phase.
+    Parameters:
+        mixing_nimg: the amount of images to train on during the mixing phase. 
+        starting_alpha: the starting value of alpha. Normally one, but could be different if a training is resumed.
+        batch_size: batch size (per worker, in case of data parallel training)
+        global_size: number of workers in data parallel training (1 otherwise)
+    Returns:
+        tf.assign operation to update the alpha value
+    """
+
+    # Specify alpha update op for mixing phase.
+    # If there are zero mixing steps (e.g. when resuming at the start of the stabilization phase), simply assign 0:
+    if mixing_nimg == 0:
+        alpha = alpha.assign(0)
+    else:
+        num_steps = mixing_nimg // (batch_size * global_size)
+        alpha_update = starting_alpha / num_steps
+        alpha = alpha.assign(tf.maximum(alpha - alpha_update, 0))
+    return alpha
+
 def k(x):
     if x < 3:
         return 1

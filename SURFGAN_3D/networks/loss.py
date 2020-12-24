@@ -14,6 +14,7 @@ def forward_generator(generator,
                       leakiness,
                       network_size,
                       loss_fn,
+                      noise_stddev,
                       is_reuse=False
                       ):
     z = tf.random.normal(shape=[tf.shape(real_image_input)[0], latent_dim])
@@ -21,7 +22,7 @@ def forward_generator(generator,
                            base_dim, base_shape, activation=activation,
                            param=leakiness, size=network_size, is_reuse=is_reuse)
 
-    gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * 0.01
+    gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
 
     # Generator training.
     disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, base_shape, base_dim, latent_dim,
@@ -52,6 +53,7 @@ def forward_discriminator(generator,
                           network_size,
                           loss_fn,
                           gp_weight,
+                          noise_stddev,
                           is_reuse=False,
                           ):
     z = tf.random.normal(shape=[tf.shape(real_image_input)[0], latent_dim])
@@ -59,7 +61,7 @@ def forward_discriminator(generator,
                            base_dim, base_shape, activation=activation,
                            param=leakiness, size=network_size, is_reuse=is_reuse)
 
-    gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * 0.01
+    gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
 
     # Discriminator Training
     disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
@@ -111,6 +113,7 @@ def forward_simultaneous(generator,
                          network_size,
                          loss_fn,
                          gp_weight,
+                         noise_stddev,
                          conditioning=None
                          ):
     z = tf.random.normal(shape=[tf.shape(real_image_input)[0], latent_dim])
@@ -118,7 +121,7 @@ def forward_simultaneous(generator,
                            base_dim, base_shape, activation=activation,
                            param=leakiness, size=network_size, conditioning=conditioning)
 
-    gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * 0.01
+    gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
     # Discriminator Training
     disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
                                 base_shape, base_dim, latent_dim, activation=activation, param=leakiness,
