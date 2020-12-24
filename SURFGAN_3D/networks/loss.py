@@ -22,6 +22,8 @@ def forward_generator(generator,
                            base_dim, base_shape, activation=activation,
                            param=leakiness, size=network_size, is_reuse=is_reuse)
 
+    # Add instance noise to make training more stable. See e.g. https://www.inference.vc/instance-noise-a-trick-for-stabilising-gan-training/
+    real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * noise_stddev
     gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
 
     # Generator training.
@@ -61,6 +63,8 @@ def forward_discriminator(generator,
                            base_dim, base_shape, activation=activation,
                            param=leakiness, size=network_size, is_reuse=is_reuse)
 
+    # Add instance noise to make training more stable. See e.g. https://www.inference.vc/instance-noise-a-trick-for-stabilising-gan-training/
+    real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * noise_stddev
     gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
 
     # Discriminator Training
@@ -121,7 +125,10 @@ def forward_simultaneous(generator,
                            base_dim, base_shape, activation=activation,
                            param=leakiness, size=network_size, conditioning=conditioning)
 
+    # Add instance noise to make training more stable. See e.g. https://www.inference.vc/instance-noise-a-trick-for-stabilising-gan-training/
+    real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * noise_stddev
     gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
+    
     # Discriminator Training
     disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
                                 base_shape, base_dim, latent_dim, activation=activation, param=leakiness,

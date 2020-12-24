@@ -96,7 +96,7 @@ def optuna_objective(trial, args, config):
         # If it is not set explicitely, we use the same as the global batch size, but never less than 2 per worker (1 per worker potentially makes some metrics crash)
         num_metric_samples = get_num_metric_samples(args.num_metric_samples, batch_size, global_size)
 
-        # Create input tensor, and add some noise to make training more stable. See e.g. https://www.inference.vc/instance-noise-a-trick-for-stabilising-gan-training/
+        # Create input tensor
         real_image_input = tf.placeholder(shape=get_current_input_shape(phase, batch_size, args.start_shape), dtype=tf.float32)
         # data_stddev = 1024
         # data_mean = 1024
@@ -104,7 +104,7 @@ def optuna_objective(trial, args, config):
         # mean_tensor = tf.Variable(data_mean, dtype = real_image_input.dtype)
         # real_image_input = tf.math.subtract(real_image_input, mean_tensor)
         # real_image_input = tf.math.divide(real_image_input, stddev_tensor)
-        real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * args.noise_stddev
+        
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
@@ -158,9 +158,11 @@ def optuna_objective(trial, args, config):
         with tf.variable_scope('alpha'):
             alpha = tf.Variable(1, name='alpha', dtype=tf.float32)
 
-        # Alpha init
+        # Alpha ops
         init_alpha = alpha.assign(1)
         update_alpha = nw.ops.alpha_update(alpha, args.mixing_nimg, args.starting_alpha, batch_size, global_size)
+        assign_starting_alpha = alpha.assign(args.starting_alpha)
+        assign_zero = alpha.assign(0)
 
         # Performs a forward pass, computes gradients, clips them (if desired), and then applies them.
         # Supports simultaneous forward pass of generator and discriminator, or alternatingly (discriminator first)
@@ -229,8 +231,7 @@ def optuna_objective(trial, args, config):
         
         init_op = tf.global_variables_initializer()
         # Probably these alpha ops could be with the other ops above, but... it changes reproducibility of my runs. So for now, I'll leave them here.
-        assign_starting_alpha = alpha.assign(args.starting_alpha)
-        assign_zero = alpha.assign(0)
+
         broadcast = hvd.broadcast_global_variables(0)
 
         with tf.Session(config=config) as sess:
