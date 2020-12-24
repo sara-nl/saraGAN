@@ -24,10 +24,10 @@ def forward_generator(generator,
 
     # Add instance noise to make training more stable. See e.g. https://www.inference.vc/instance-noise-a-trick-for-stabilising-gan-training/
     real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * noise_stddev
-    gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
+    gen_sample_noisy = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
 
     # Generator training.
-    disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, base_shape, base_dim, latent_dim,
+    disc_fake_g = discriminator(gen_sample_noisy, alpha, phase, num_phases, base_shape, base_dim, latent_dim,
                                 activation=activation, param=leakiness, size=network_size, is_reuse=is_reuse)
     if loss_fn == 'wgan':
         gen_loss = -tf.reduce_mean(disc_fake_g)
@@ -65,10 +65,10 @@ def forward_discriminator(generator,
 
     # Add instance noise to make training more stable. See e.g. https://www.inference.vc/instance-noise-a-trick-for-stabilising-gan-training/
     real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * noise_stddev
-    gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
+    gen_sample_noisy = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
 
     # Discriminator Training
-    disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
+    disc_fake_d = discriminator(tf.stop_gradient(gen_sample_noisy), alpha, phase, num_phases,
                                 base_shape, base_dim, latent_dim, activation=activation, param=leakiness,
                                 size=network_size, )
     disc_real = discriminator(real_image_input, alpha, phase, num_phases,
@@ -76,7 +76,7 @@ def forward_discriminator(generator,
                               is_reuse=True, size=network_size, )
 
     gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
-    interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
+    interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample_noisy)
     gradients = tf.gradients(discriminator(interpolates, alpha, phase,
                                            num_phases, base_shape, base_dim, latent_dim,
                                            is_reuse=True, activation=activation,
@@ -127,10 +127,10 @@ def forward_simultaneous(generator,
 
     # Add instance noise to make training more stable. See e.g. https://www.inference.vc/instance-noise-a-trick-for-stabilising-gan-training/
     real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * noise_stddev
-    gen_sample = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
+    gen_sample_noisy = gen_sample + tf.random.normal(shape=tf.shape(gen_sample)) * noise_stddev
     
     # Discriminator Training
-    disc_fake_d = discriminator(tf.stop_gradient(gen_sample), alpha, phase, num_phases,
+    disc_fake_d = discriminator(tf.stop_gradient(gen_sample_noisy), alpha, phase, num_phases,
                                 base_shape, base_dim, latent_dim, activation=activation, param=leakiness,
                                 size=network_size, conditioning=conditioning)
     disc_real = discriminator(real_image_input, alpha, phase, num_phases,
@@ -138,7 +138,7 @@ def forward_simultaneous(generator,
                               is_reuse=True, size=network_size, conditioning=conditioning)
 
     gamma = tf.random_uniform(shape=[tf.shape(real_image_input)[0], 1, 1, 1, 1], minval=0., maxval=1.)
-    interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample)
+    interpolates = gamma * real_image_input + (1 - gamma) * tf.stop_gradient(gen_sample_noisy)
 
     gradients = tf.gradients(discriminator(interpolates, alpha, phase,
                                            num_phases, base_shape, base_dim, latent_dim,
@@ -147,7 +147,7 @@ def forward_simultaneous(generator,
     slopes = tf.sqrt(tf.reduce_sum(tf.square(gradients), reduction_indices=(1, 2, 3)))
 
     # Generator training.
-    disc_fake_g = discriminator(gen_sample, alpha, phase, num_phases, base_shape, base_dim, latent_dim,
+    disc_fake_g = discriminator(gen_sample_noisy, alpha, phase, num_phases, base_shape, base_dim, latent_dim,
                                 activation=activation, param=leakiness, size=network_size, is_reuse=True, conditioning=conditioning)
 
     if loss_fn == 'wgan':
