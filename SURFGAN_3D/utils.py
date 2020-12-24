@@ -9,6 +9,18 @@ import time
 
 from dataset import NumpyPathDataset
 
+def dump_weight_for_debugging(sess):
+    """Dumps the first weight from the dense layer. Can be used for debugging, e.g. to see how it develops, or if it gets loaded correctly from a checkpoint.
+    Parameters:
+        sess: a tf.Session that can be used to evaluate the dense layer
+    Returns:
+        None (weight gets printed)
+    """
+    # DEBUG, allows querying a single weight, to see how it develops:
+    var = [v for v in tf.trainable_variables() if v.name == "generator/generator_in/dense/weight:0"][0]
+    print(f"generator/generator_in/dense/weight:0: {sess.run(var)[0, 0]}")
+
+
 def print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha):
     """Print some summary statistics to stdout.
     Parameters:
