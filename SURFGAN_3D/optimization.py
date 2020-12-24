@@ -35,7 +35,7 @@ def minimize_with_clipping(optimizer, loss, var_list, clipping):
     return train_op, gradients, variables, max_norm
 
 def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_image_input, latent_dim, alpha, phase,
-    num_phases, base_dim, base_shape, activation, leakiness, network_size, loss_fn, gp_weight, optim_strategy, g_clipping, d_clipping):
+    num_phases, base_dim, base_shape, activation, leakiness, network_size, loss_fn, gp_weight, optim_strategy, g_clipping, d_clipping, noise_stddev):
     """Defines the op for a single optimization step.
     Parameters:
         optimizer_gen:
@@ -57,6 +57,7 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         optim_strategy:
         g_clipping:
         d_clipping:
+        noise_stddev:
     Returns:
         train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables
         train_gen: generator training op
@@ -87,7 +88,8 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             leakiness,
             network_size,
             loss_fn,
-            gp_weight
+            gp_weight,
+            noise_stddev
         )
 
         gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
@@ -113,6 +115,7 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             network_size,
             loss_fn,
             gp_weight,
+            noise_stddev,
             # conditioning=real_label
         )
 
@@ -134,6 +137,7 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
                 leakiness,
                 network_size,
                 loss_fn,
+                noise_stddev,
                 is_reuse=True
             )
 

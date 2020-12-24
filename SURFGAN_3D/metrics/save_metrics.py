@@ -77,6 +77,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
 
         real_batch = np.stack([np.load(npy_data[i]) for i in range(start_loc, start_loc + batch_size)])
         real_batch = real_batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
+        # real_batch = real_batch[:, np.newaxis, ...].astype(np.float32)
         fake_batch = sess.run(gen_sample).astype(np.float32)
 
         # Turn fake batch into HUs and clip to training range.

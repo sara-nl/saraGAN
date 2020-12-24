@@ -96,8 +96,14 @@ def optuna_objective(trial, args, config):
         # If it is not set explicitely, we use the same as the global batch size, but never less than 2 per worker (1 per worker potentially makes some metrics crash)
         num_metric_samples = get_num_metric_samples(args.num_metric_samples, batch_size, global_size)
 
-        # Create input tensor, and add some noise to make training more robust against input noise
+        # Create input tensor, and add some noise to make training more stable. See e.g. https://www.inference.vc/instance-noise-a-trick-for-stabilising-gan-training/
         real_image_input = tf.placeholder(shape=get_current_input_shape(phase, batch_size, args.start_shape), dtype=tf.float32)
+        # data_stddev = 1024
+        # data_mean = 1024
+        # stddev_tensor = tf.Variable(data_stddev, dtype = real_image_input.dtype)
+        # mean_tensor = tf.Variable(data_mean, dtype = real_image_input.dtype)
+        # real_image_input = tf.math.subtract(real_image_input, mean_tensor)
+        # real_image_input = tf.math.divide(real_image_input, stddev_tensor)
         real_image_input = real_image_input + tf.random.normal(tf.shape(real_image_input)) * args.noise_stddev
 
         # ------------------------------------------------------------------------------------------#
@@ -177,7 +183,8 @@ def optuna_objective(trial, args, config):
             args.gp_weight,
             args.optim_strategy,
             args.g_clipping,
-            args.d_clipping
+            args.d_clipping,
+            args.noise_stddev
         )
 
         if verbose:
@@ -305,6 +312,7 @@ def optuna_objective(trial, args, config):
                 batch_paths = npy_data[batch_loc: batch_loc + batch_size]
                 batch = np.stack([np.load(path) for path in batch_paths])
                 batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
+                # batch = batch[:, np.newaxis, ...].astype(np.float32)
                 #print("Got a batch!")
 
                 #sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="readline")
@@ -347,11 +355,7 @@ def optuna_objective(trial, args, config):
                             # print('Computing and writing metrics...')
                         metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
 
-                        # DEBUG, allows querying a single weight, to see how it develops:
-                        # var = [v for v in tf.trainable_variables() if v.name == "generator/generator_in/dense/weight:0"][0]
-                        # var_alpha = [v for v in tf.trainable_variables() if v.name == "alpha/alpha:0"][0]
-                        # print(f"generator/generator_in/dense/weight:0: {sess.run(var)[0, 0]}")
-                        # print(f"alpha/alpha:0: {sess.run(var_alpha)}")
+
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']

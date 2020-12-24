@@ -6,25 +6,17 @@ import horovod.tensorflow as hvd
 import time
 import random
 import optuna
-# from signal import signal, SIGSEGV
 
-# from dataset import NumpyPathDataset
-# from utils import count_parameters, image_grid, parse_tuple, MPMap, log0, lr_update
 from utils import get_verbosity
 from mpi4py import MPI
 import os
-# import importlib
-# from rectified_adam import RAdamOptimizer
-# from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
 import psutil
-# from networks.ops import num_filters
+
 from tensorflow.data.experimental import AUTOTUNE
 import nvgpu
 import logging
 
 from optuna_objective import optuna_objective
-
-# from metrics.save_metrics import save_metrics
 
 # For TensorBoard Debugger:
 from tensorflow.python import debug as tf_debug
