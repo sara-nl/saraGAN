@@ -80,7 +80,7 @@ def optuna_override_undefined(args, trial):
         print(f"args.g_lr_decrease = {args.g_lr_decrease} (from: command line argument)")
         print(f"args.g_lr_decay_niter = {args.g_lr_decay_niter} (from: command line argument)")
 
-    if args.d_lr_increase is None and not args.d_lr_rise_niter is None:
+    if args.d_lr_increase is None and args.d_lr_rise_niter is None:
         d_lr_sched_inc = trial.suggest_categorical('d_lr_sched_inc', [0, 1, 2, 3, 4, 5, 6, 7, 8])
         args.d_lr_increase = lr_schedule[d_lr_sched_inc]['lr_sched']
         args.d_lr_rise_niter = np.ceil(lr_schedule[d_lr_sched_inc]['lr_fract'] * (args.mixing_nimg + args.stabilizing_nimg)).astype(np.int32)
