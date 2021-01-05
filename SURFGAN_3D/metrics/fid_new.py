@@ -26,7 +26,7 @@ import pathlib
 import warnings
 from skimage.transform import resize
 
-
+import dataset as data
 
 class InvalidFIDException(Exception):
     pass
@@ -270,9 +270,9 @@ def get_activations_from_volume(volume, sess, batch_size=64, verbose=False):
         if len(batch) == 0:
             continue
 
-        batch = (((batch + 1024) / 3072) * 255).astype(int) # [0, 255, int]
+        batch = data.stdnormal_to_8bit_numpy(batch, verbose)
         pred = sess.run(inception_layer, {'FID_Inception_Net/ExpandDims:0': batch})
-        pred_arr[start:end] = pred.reshape(batch_size, -1)
+        pred_arr[start:end] = pred.reshape(-1, 2048)
         del batch  # clean up memory
     if verbose:
         print(" done")
@@ -327,7 +327,7 @@ def calculate_fid_given_volumes(volume_real, volume_fake, inception_path, sess):
     return fid_value
 
 
-def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, sess, inception_path=None, data_format='NCDHW'):
+def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, sess, inception_path=None, data_format='NCDHW', verbose=True):
 
     # FID calculation only makes sense if the tensors for fakes and real have the same shape
     if volumes_batch_real.shape != volumes_batch_fake.shape:
@@ -371,6 +371,17 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
     activations_fake = []
     for i in range(len(volumes_batch_fake)):
         # print("DEBUG: Getting activations for volumes %i" % i)
+
+        # Check if input looks standard-normal. If not, warn the user that FID computation may be inaccurate
+        if (
+            (np.amax(np.abs(volumes_batch_real[i])) > 8) or
+            (np.amax(np.abs(volumes_batch_real[i])) < 0.1 ) and
+            (verbose)
+        ):
+            print("WARNING: it looks like your real input images are unnormalized. This may result in inaccurate FID calculations: "
+            "the inception network assumes inputs in the range [0,255] and this code assumes a standard normalized input in order "
+            "to map to this range. Please implement your own mapping to replace the call to data.stdnormal_to_8bit_numpy() in fid_new.py")
+
         act_real = get_activations_from_volume(volumes_batch_real[i], sess, batch_size = batch_size)
         act_fake = get_activations_from_volume(volumes_batch_fake[i], sess, batch_size = batch_size)
 

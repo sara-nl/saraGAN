@@ -4,6 +4,8 @@ import horovod.tensorflow as hvd
 from mpi4py import MPI
 import time
 
+import dataset as data
+
 from metrics import (calculate_fid_given_batch_volumes, get_swd_for_volumes,
                      get_normalized_root_mse, get_mean_squared_error, get_psnr, get_ssim)
 
@@ -14,7 +16,7 @@ def add_to_metric_summary(metric_name, metric_value, summary_metrics, sess):
     sess.run([init_metric, update_metric])
     summary_metrics.append(tf.summary.scalar(metric_name, metric_tensor))
 
-def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, imagesize_xy, horovod, compute_metrics, num_metric_samples, verbose):
+def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, imagesize_xy, horovod, compute_metrics, num_metric_samples, data_mean, data_stddev, verbose):
     """
     Saves metrics to a tf.summary
 
@@ -42,6 +44,10 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
         Uses the keys 'compute_<metric>' with <metric> being swds, ssims, FID, psnrs, mses, nrmses and specifies booleans for whether or not that metric should be computed
     num_metric_samples : int
         Number of batches to compute the metrics on. Metrics are averaged over these batches. Limit is set on the global number of processed batches if Horovod is used.
+    data_mean: float
+        Mean of the dataset. Used to normalize data (if provided)
+    data_stddev: float
+        Standard deviation of the dataset. Used to normalize the data (if provided)
     verbose : bool
         Should verbose output be printed? (Typically only for rank 0 if Horovod is used)
 
@@ -76,22 +82,25 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
             start_loc = 0
 
         real_batch = np.stack([np.load(npy_data[i]) for i in range(start_loc, start_loc + batch_size)])
-        real_batch = real_batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
+        real_batch = real_batch[:, np.newaxis, ...].astype(np.float32)
+        # Here, we normalize the numpy data, i.e. we don't normalize as part of the graph. (since most metrics are computed with pure numpy, not with TF)
+        real_batch = data.normalize_numpy(real_batch, data_mean, data_stddev, verbose)
+        # real_batch = real_batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
         # real_batch = real_batch[:, np.newaxis, ...].astype(np.float32)
         fake_batch = sess.run(gen_sample).astype(np.float32)
 
         # Turn fake batch into HUs and clip to training range.
-        fake_batch = (np.clip(fake_batch, -1, 2) * 1024).astype(np.int16)
+        # fake_batch = (np.clip(fake_batch, -1, 2) * 1024).astype(np.int16)
 
-#        if verbose:
-#            print('Real shape', real_batch.shape)
-#            print('Fake shape', real_batch.shape)
-#            print('real min, max', real_batch.min(), real_batch.max())
-#            print('fake min, max', fake_batch.min(), fake_batch.max())
+        if verbose:
+            print('Real shape', real_batch.shape)
+            print('Fake shape', real_batch.shape)
+            print('real min, max', real_batch.min(), real_batch.max())
+            print('fake min, max', fake_batch.min(), fake_batch.max())
 
         if compute_metrics['compute_FID']:
             start = time.time()
-            fids_local.append(calculate_fid_given_batch_volumes(real_batch, fake_batch, sess))
+            fids_local.append(calculate_fid_given_batch_volumes(real_batch, fake_batch, sess, verbose = verbose))
             end = time.time()
             if report_timings:
                 print("fids took %s" % (end-start))
