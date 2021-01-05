@@ -97,19 +97,8 @@ def optuna_objective(trial, args, config):
         # If it is not set explicitely, we use the same as the global batch size, but never less than 2 per worker (1 per worker potentially makes some metrics crash)
         num_metric_samples = get_num_metric_samples(args.num_metric_samples, batch_size, global_size)
 
-        # # Create input tensor
-        # real_image_input_unnormalized = tf.placeholder(shape=get_current_input_shape(phase, batch_size, args.start_shape), dtype=np.load(npy_data[0]).dtype)
-        # # CT numpy data is tf.uint16, but other images may already be float32. Thus, conditionally add a tf.cast:
-        # if real_image_input_unnormalized.dtype == tf.uint16:
-        #     if verbose:
-        #         print("INFO: Casting uint16 input images to float32")
-        #     real_image_input_unnormalized = tf.cast(real_image_input_unnormalized, tf.float32)
-        # # Standard normalization of input based on the provided data_mean and data_stddev
-        # real_image_input = data.normalize(real_image_input_unnormalized, args.data_mean, args.data_stddev, verbose)
-
-        # For normalization with numpy, instead of as part of the graph
-        real_image_input_unnormalized = tf.placeholder(shape=get_current_input_shape(phase, batch_size, args.start_shape), dtype=tf.float32)
-        real_image_input = real_image_input_unnormalized
+        # Create input tensor
+        real_image_input = tf.placeholder(shape=get_current_input_shape(phase, batch_size, args.start_shape), dtype=tf.float32)
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
@@ -282,24 +271,6 @@ def optuna_objective(trial, args, config):
                 print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}")
             else:
                 print(f"Trial: {trial.number}, Parameters: {trial.params}")
-
-            ## DEBUGGING INPUT DATA:
-            # batch_loc = np.random.randint(0, len(npy_data) - batch_size)
-            # batch_paths = npy_data[batch_loc: batch_loc + batch_size]
-            # batch = np.stack([np.load(path) for path in batch_paths])
-            # print(batch[0, ...])
-            # # batch = batch[:, np.newaxis, ...].astype(np.float32)
-            # batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
-
-            # unnorm_image, normalized_image = sess.run(
-            #              [real_image_input_unnormalized, real_image_input], feed_dict={real_image_input_unnormalized: batch})
-            # print(f"unnorm_image.shape: {unnorm_image.shape}")
-            # print(f"normalized_image.shape: {normalized_image.shape}")
-
-
-            # # print(unnorm_image[0, ...])
-            # print(normalized_image[0, ...])
-
 
             # ------------------------------------------------------------------------------------------#
             # Training loop for mixing phase

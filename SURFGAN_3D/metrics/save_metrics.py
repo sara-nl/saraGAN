@@ -85,12 +85,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
         real_batch = real_batch[:, np.newaxis, ...].astype(np.float32)
         # Here, we normalize the numpy data, i.e. we don't normalize as part of the graph. (since most metrics are computed with pure numpy, not with TF)
         real_batch = data.normalize_numpy(real_batch, data_mean, data_stddev, verbose)
-        # real_batch = real_batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
-        # real_batch = real_batch[:, np.newaxis, ...].astype(np.float32)
         fake_batch = sess.run(gen_sample).astype(np.float32)
-
-        # Turn fake batch into HUs and clip to training range.
-        # fake_batch = (np.clip(fake_batch, -1, 2) * 1024).astype(np.int16)
 
         if verbose:
             print('Real shape', real_batch.shape)
