@@ -327,15 +327,15 @@ def optuna_objective(trial, args, config):
                 if large_summary_bool:
                     _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, summary_small, summary_large,
-                          disc_loss, gen_loss], feed_dict={real_image_input_unnormalized: batch})
+                          disc_loss, gen_loss], feed_dict={real_image_input: batch})
                 elif small_summary_bool:
                     _, _, summary_s, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, summary_small,
-                          disc_loss, gen_loss], feed_dict={real_image_input_unnormalized: batch})
+                          disc_loss, gen_loss], feed_dict={real_image_input: batch})
                 else:
                     _, _, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, disc_loss, gen_loss],
-                         feed_dict={real_image_input_unnormalized: batch})
+                         feed_dict={real_image_input: batch})
                 #print("Completed step")
                 global_step += batch_size * global_size
                 local_step += 1
