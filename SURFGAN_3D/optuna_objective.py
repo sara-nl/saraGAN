@@ -8,6 +8,7 @@ import random
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
 from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables, print_summary_to_stdout
+import dataset as data
 from optuna_suggestions import optuna_override_undefined
 import os
 import importlib
@@ -96,15 +97,19 @@ def optuna_objective(trial, args, config):
         # If it is not set explicitely, we use the same as the global batch size, but never less than 2 per worker (1 per worker potentially makes some metrics crash)
         num_metric_samples = get_num_metric_samples(args.num_metric_samples, batch_size, global_size)
 
-        # Create input tensor
-        real_image_input = tf.placeholder(shape=get_current_input_shape(phase, batch_size, args.start_shape), dtype=tf.float32)
-        # data_stddev = 1024
-        # data_mean = 1024
-        # stddev_tensor = tf.Variable(data_stddev, dtype = real_image_input.dtype)
-        # mean_tensor = tf.Variable(data_mean, dtype = real_image_input.dtype)
-        # real_image_input = tf.math.subtract(real_image_input, mean_tensor)
-        # real_image_input = tf.math.divide(real_image_input, stddev_tensor)
-        
+        # # Create input tensor
+        # real_image_input_unnormalized = tf.placeholder(shape=get_current_input_shape(phase, batch_size, args.start_shape), dtype=np.load(npy_data[0]).dtype)
+        # # CT numpy data is tf.uint16, but other images may already be float32. Thus, conditionally add a tf.cast:
+        # if real_image_input_unnormalized.dtype == tf.uint16:
+        #     if verbose:
+        #         print("INFO: Casting uint16 input images to float32")
+        #     real_image_input_unnormalized = tf.cast(real_image_input_unnormalized, tf.float32)
+        # # Standard normalization of input based on the provided data_mean and data_stddev
+        # real_image_input = data.normalize(real_image_input_unnormalized, args.data_mean, args.data_stddev, verbose)
+
+        # For normalization with numpy, instead of as part of the graph
+        real_image_input_unnormalized = tf.placeholder(shape=get_current_input_shape(phase, batch_size, args.start_shape), dtype=tf.float32)
+        real_image_input = real_image_input_unnormalized
 
         # ------------------------------------------------------------------------------------------#
         # OPTIMIZERS
@@ -278,6 +283,24 @@ def optuna_objective(trial, args, config):
             else:
                 print(f"Trial: {trial.number}, Parameters: {trial.params}")
 
+            ## DEBUGGING INPUT DATA:
+            # batch_loc = np.random.randint(0, len(npy_data) - batch_size)
+            # batch_paths = npy_data[batch_loc: batch_loc + batch_size]
+            # batch = np.stack([np.load(path) for path in batch_paths])
+            # print(batch[0, ...])
+            # # batch = batch[:, np.newaxis, ...].astype(np.float32)
+            # batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
+
+            # unnorm_image, normalized_image = sess.run(
+            #              [real_image_input_unnormalized, real_image_input], feed_dict={real_image_input_unnormalized: batch})
+            # print(f"unnorm_image.shape: {unnorm_image.shape}")
+            # print(f"normalized_image.shape: {normalized_image.shape}")
+
+
+            # # print(unnorm_image[0, ...])
+            # print(normalized_image[0, ...])
+
+
             # ------------------------------------------------------------------------------------------#
             # Training loop for mixing phase
 
@@ -307,13 +330,19 @@ def optuna_objective(trial, args, config):
                         print(f'Writing checkpoint file: model_{phase}_ckpt_{global_step}')
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
-                # TODO: seperate normalization, either here, or do it as part of the creation of the real_image_input tensor. The last is probably faster.
-                #print("Batching...")
+                # Get randomly selected batch
                 batch_loc = np.random.randint(0, len(npy_data) - batch_size)
                 batch_paths = npy_data[batch_loc: batch_loc + batch_size]
                 batch = np.stack([np.load(path) for path in batch_paths])
-                batch = batch[:, np.newaxis, ...].astype(np.float32) / 1024 - 1
-                # batch = batch[:, np.newaxis, ...].astype(np.float32)
+                batch = batch[:, np.newaxis, ...]
+
+                # Normalize data (byt only if args.data_mean AND args.data_stddev are defined)
+                batch = data.normalize_numpy(batch, args.data_mean, args.data_stddev, verbose)
+
+                # if args.horovod:
+                #     print(f"Worker {hvd.rank()} got batch from {batch_loc} to {batch_loc + batch_size}")
+                # else:
+                #     print(f"got batch from {batch_loc} to {batch_loc + batch_size}")
                 #print("Got a batch!")
 
                 #sess = tf_debug.LocalCLIDebugWrapperSession(sess, ui_type="readline")
@@ -327,15 +356,15 @@ def optuna_objective(trial, args, config):
                 if large_summary_bool:
                     _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, summary_small, summary_large,
-                          disc_loss, gen_loss], feed_dict={real_image_input: batch})
+                          disc_loss, gen_loss], feed_dict={real_image_input_unnormalized: batch})
                 elif small_summary_bool:
                     _, _, summary_s, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, summary_small,
-                          disc_loss, gen_loss], feed_dict={real_image_input: batch})
+                          disc_loss, gen_loss], feed_dict={real_image_input_unnormalized: batch})
                 else:
                     _, _, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, disc_loss, gen_loss],
-                         feed_dict={real_image_input: batch})
+                         feed_dict={real_image_input_unnormalized: batch})
                 #print("Completed step")
                 global_step += batch_size * global_size
                 local_step += 1
@@ -354,7 +383,7 @@ def optuna_objective(trial, args, config):
                     if args.calc_metrics:
                         # if verbose:
                             # print('Computing and writing metrics...')
-                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, verbose)
+                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose)
 
 
 
@@ -379,7 +408,8 @@ def optuna_objective(trial, args, config):
                     elif speed_measurement_bool:
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
-                    # print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha)
+                    if args.optuna_use_best_trial is not None or args.optuna_ntrials == 1:
+                        print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha)
 
                 # Is only executed once per phase, because the mixing_bool is then flipped to False
                 if mixing_bool and (global_step >= ((phase - args.starting_phase)
