@@ -72,7 +72,7 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         d_variables: discriminator variables (names)
     """
 
-    # Perform forward steps of discriminator and generatiour simulatnesouly
+    # Perform forward steps of discriminator and generator simultaneously
     if optim_strategy == 'simultaneous':
         gen_loss, disc_loss, gp_loss, gen_sample = forward_simultaneous(
             generator,
@@ -98,6 +98,7 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
         train_disc, d_gradients, d_variables, max_d_norm = minimize_with_clipping(optimizer_disc, disc_loss, disc_vars, d_clipping)
 
+    # Perform forward steps of discriminator and generator alternatingly
     elif optim_strategy == 'alternate':
 
         disc_loss, gp_loss = forward_discriminator(
