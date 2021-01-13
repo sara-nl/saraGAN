@@ -7,6 +7,7 @@ import tensorflow as tf
 import multiprocessing
 import itertools
 import psutil
+# import copy
 
 def stdnormal_to_8bit_numpy(normalized_input, verbose):
     """Maps standard normalized channels (mean=0, stddev=1) to 8-bit channels ([0,255]).
@@ -154,6 +155,8 @@ class NumpyDataset:
         return len(self.npy_files)
 
 
+# TODO: create init based on filelist (a glob-like object). This way, we can easily split a glob-like object into training/validation/test parts,
+# and create training/validation/test NumpyPathDataset for each of those.
 class NumpyPathDataset:
     def __init__(self, npy_dir, scratch_dir, copy_files, is_correct_phase):
         super(NumpyPathDataset, self).__init__()
@@ -165,13 +168,7 @@ class NumpyPathDataset:
                 scratch_dir = scratch_dir[:-1]
 
         self.scratch_dir = os.path.normpath(scratch_dir + npy_dir) if is_correct_phase else npy_dir
-        if copy_files and is_correct_phase:
-            os.makedirs(self.scratch_dir, exist_ok=True)
-            print("Copying files to scratch...")
-            for f in self.npy_files:
-                # os.path.isdir(self.scratch_dir)
-                if not os.path.isfile(os.path.normpath(scratch_dir + f)):
-                    shutil.copy(f, os.path.normpath(scratch_dir + f))
+        self._copy_files_to_scratch(scratch_dir, copy_files, is_correct_phase)
 
         while len(glob.glob(self.scratch_dir + '/*.npy')) < len(self.npy_files):
             time.sleep(1)
@@ -184,6 +181,18 @@ class NumpyPathDataset:
         self.dtype = test_npy_array.dtype
         del test_npy_array
 
+        # TODO: Split the dataset into a test and training set (add arguments to __init__ to determine the fractions, then use those in get_training_batch to randomly select samples from the first X% of the dataset)
+
+    def _copy_files_to_scratch(self, scratch_dir, copy_files, is_correct_phase):
+        if copy_files and is_correct_phase:
+            print(f"Scratch dir: {self.scratch_dir}")
+            os.makedirs(self.scratch_dir, exist_ok=True)
+            print("Copying files to scratch...")
+            for f in self.npy_files:
+                # os.path.isdir(self.scratch_dir)
+                if not os.path.isfile(os.path.normpath(scratch_dir + f)):
+                    shutil.copy(f, os.path.normpath(scratch_dir + f))
+
     def __iter__(self):
         for path in self.scratch_files:
             yield path
@@ -194,3 +203,116 @@ class NumpyPathDataset:
     def __len__(self):
         return len(self.scratch_files)
 
+    # @classmethod
+    # def from_NumpyPathDataset(cls, class_instance):
+    #     obj.scratch_files = copy.deepcopy(class_instance.scratch_files)
+    #     obj.scratch_dir = copy.deepcopy(class_instance.scratch_dir)
+    #     obj.npy_files = copy.deepcopy(class_instance.npy_files)
+    #     return obj
+
+
+    def split_by_fraction(self, fraction):
+        """Split this NumpyPathDataset object into multiple NumpyPathDataset objects, according to provided ratios. E.g. for creating a train, validation and test set.
+        Parameters:
+            fraction: fraction according to which to split the dataset. E.g. 0.7 will return a one dataset with 70% of the original samples, and another with 30%.
+        Returns:
+            dataset1, dataset2: two NumpyPathDataset objects
+        """
+
+        nsamples_dataset1 = int( np.round(fraction*len(self.scratch_files)) + 1e-5)
+        nsamples_dataset2 = len(self.scratch_files)
+
+        # If the number of computed samples for either dataset isn't at least 1, something most likely went wrong
+        assert nsamples_dataset1 > 0 and nsamples_dataset2 > 0
+
+        return self.split_by_index(nsamples_dataset1)
+    
+    def split_by_index(self, index):
+        """Split this NumpyPathDataset object into multiple NumpyPathDataset objects, according to provided index. E.g. for creating a train, validation and test set.
+        Parameters:
+            index: index to the self.scratch_files array that will determine the last sample that is part of dataset1. index+1 will be the first sample of dataset2.
+        Returns:
+            dataset1, dataset2: two NumpyPathDataset objects
+        """
+        dataset1 = copy.deepcopy(self)
+        dataset2 = copy.deepcopy(self)
+
+        dataset1.scratch_files = self.scratch_files[0:index]
+        dataset2.scratch_files = self.scratch_files[index:]
+    
+        dataset1.npy_files = self.npy_files[0:index]
+        dataset2.npy_files = self.npy_files[index:]
+
+        return dataset1, dataset2
+
+
+
+
+        
+        
+    # def get_training_batch(self, batch_size):
+    #     """Returns a batch of numpy arrays. Arrays are randomly selected from the training samples of this dataset.
+    #     Parameters:
+    #         batch_size: size of the batch that should be returned
+    #     """
+
+# class CachedDataset:
+#     """This will replace the NumpyPathDataset. 
+#     It will hold only the filenames, and a caching directory for this dataset on a faster, local FS. 
+#     The cache is unmanaged and will grow to the full dataset size.
+#     """
+#     def __init__(self, filelist, cache_dir, copy_files, is_correct_phase):
+#         """"
+#         Initializer for the CachedDataset
+#         Parameters:
+#             filelist: a glob-like object with the full path filenames to the files of this dataset
+#             cache_dir: the cache will be stored in this directory. For multiprocessing, make sure all workers that share a node point to the same cache_dir
+#         """
+#         super(CachedDataset, self).__init__()
+#         print(f"Length of dataset: {len(filelist)}")
+
+#         # Strip common prefix, to make nesting less deep
+#         common_prefix = os.path.commonprefix(filelist)
+#         filelist_short = [filename[len(common_prefix):] for filename in filelist]
+        
+#         # Cachedir, a temprary dir in scratch_dir
+#         self.cachedir = 
+
+#         self.npy_files = glob.glob(npy_dir + '*.npy')
+        
+
+#         if scratch_dir is not None:
+#             if scratch_dir[-1] == '/':
+#                 scratch_dir = scratch_dir[:-1]
+
+#         self.scratch_dir = os.path.normpath(scratch_dir + npy_dir) if is_correct_phase else npy_dir
+#         if copy_files and is_correct_phase:
+#             os.makedirs(self.scratch_dir, exist_ok=True)
+#             print("Copying files to scratch...")
+#             for f in self.npy_files:
+#                 # os.path.isdir(self.scratch_dir)
+#                 if not os.path.isfile(os.path.normpath(scratch_dir + f)):
+#                     shutil.copy(f, os.path.normpath(scratch_dir + f))
+
+#         while len(glob.glob(self.scratch_dir + '/*.npy')) < len(self.npy_files):
+#             time.sleep(1)
+
+#         self.scratch_files = glob.glob(self.scratch_dir + '/*.npy')
+#         assert len(self.scratch_files) == len(self.npy_files)
+
+#         test_npy_array = np.load(self.scratch_files[0])[np.newaxis, ...]
+#         self.shape = test_npy_array.shape
+#         self.dtype = test_npy_array.dtype
+#         del test_npy_array
+
+#         # TODO: Split the dataset into a test and training set (add arguments to __init__ to determine the fractions, then use those in get_training_batch to randomly select samples from the first X% of the dataset)
+
+#     def __iter__(self):
+#         for path in self.scratch_files:
+#             yield path
+
+#     def __getitem__(self, idx):
+#         return self.scratch_files[idx]
+
+#     def __len__(self):
+#         return len(self.scratch_files)

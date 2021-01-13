@@ -83,7 +83,14 @@ def optuna_objective(trial, args, config):
 
         # Get NumpyPathDataset object for current phase. It's an iterable object that returns the path to samples in the dataset
         npy_data = get_numpy_dataset(phase, args.starting_phase, args.start_shape, args.dataset_path, args.scratch_path, verbose)
-        # TODO: we should probably split the npy_data in a train and validation set. The validation set can then be passed to save_metrics to compute the metrics on.
+
+        # Note: the split below preserves the ordering of npy_data. Thus, similar filenames tend to either end up all in the training or validation set.
+        # That may or may not make much sense, depending on whether there is correlation between your samples!
+        # For the medical CT scans there was: some scans are from the same patient, and usually have consequtive numbering.
+        # By splitting this way, we avoid as much as possible that correlated scans end up in both training and validation sets.
+        npy_data_train, npy_data_testval = npy_data.split_by_fraction(0.8) # Use 80% for training
+        npy_data_validation, npy_data_test = npy_data_testval.split_by_fraction(0.5) # Split remaining 20% into two blocks of 10% for validation and testing
+        #TODO: replace all instances of npy_data elsewhere in the code by npy_data_train and npy_data_validation, and npy_data_test
 
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
@@ -122,8 +129,8 @@ def optuna_objective(trial, args, config):
         update_intra_phase_step = intra_phase_step.assign_add(batch_size*global_size)
 
         # Turn arguments into constant Tensors
-        g_lr_max = tf.constant(args.d_lr, tf.float32)
-        d_lr_max = tf.constant(args.g_lr, tf.float32)
+        g_lr_max = tf.constant(args.g_lr, tf.float32)
+        d_lr_max = tf.constant(args.d_lr, tf.float32)
         steps_per_phase = tf.constant(args.mixing_nimg + args.stabilizing_nimg)
 
         update_g_lr = opt.lr_update(lr = g_lr, intra_phase_step = intra_phase_step, 
