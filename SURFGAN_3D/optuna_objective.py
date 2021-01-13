@@ -122,8 +122,8 @@ def optuna_objective(trial, args, config):
         update_intra_phase_step = intra_phase_step.assign_add(batch_size*global_size)
 
         # Turn arguments into constant Tensors
-        g_lr_max = tf.constant(args.d_lr, tf.float32)
-        d_lr_max = tf.constant(args.g_lr, tf.float32)
+        g_lr_max = tf.constant(args.g_lr, tf.float32)
+        d_lr_max = tf.constant(args.d_lr, tf.float32)
         steps_per_phase = tf.constant(args.mixing_nimg + args.stabilizing_nimg)
 
         update_g_lr = opt.lr_update(lr = g_lr, intra_phase_step = intra_phase_step, 
