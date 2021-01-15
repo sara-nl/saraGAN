@@ -274,13 +274,18 @@ class NumpyPathDataset:
                 return self.batch_new(batch_size, auto_repeat, verbose)
             else:
                 # Just return whatever is left in the samplebuffer. Note that this will be fewer samples than the specified batch_size and may cause problems in the code
-                return self._load_batch_from_filelist(self.samplebuffer)
+                batch_paths = self.samplebuffer
         else:
             # First part of the samplebuffer becomes the batch, the rest becomes the new samplebuffer
             batch_paths = self.samplebuffer[0:batch_size]
             self.samplebuffer = self.samplebuffer[batch_size:]
+        
+        if verbose:
+            print("Got batch:")
+            for element in batch_paths:
+                print(element)
 
-            return self._load_batch_from_filelist(batch_paths)
+        return self._load_batch_from_filelist(batch_paths)
         
     def repeat(self):
         """Repeat the dataset. Will be called internally once the dataset runs out of samples if auto_repeat is set."""
