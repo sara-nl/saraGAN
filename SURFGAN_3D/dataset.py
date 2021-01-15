@@ -7,7 +7,11 @@ import tensorflow as tf
 import multiprocessing
 import itertools
 import psutil
-# import copy
+import copy
+import random
+
+# TEMPORARY, only for debugging:
+import horovod.tensorflow as hvd
 
 def stdnormal_to_8bit_numpy(normalized_input, verbose):
     """Maps standard normalized channels (mean=0, stddev=1) to 8-bit channels ([0,255]).
@@ -176,6 +180,9 @@ class NumpyPathDataset:
         self.scratch_files = glob.glob(self.scratch_dir + '/*.npy')
         assert len(self.scratch_files) == len(self.npy_files)
 
+        # Initialize the samplebuffer
+        self._init_samplebuffer()
+
         test_npy_array = np.load(self.scratch_files[0])[np.newaxis, ...]
         self.shape = test_npy_array.shape
         self.dtype = test_npy_array.dtype
@@ -192,6 +199,12 @@ class NumpyPathDataset:
                 # os.path.isdir(self.scratch_dir)
                 if not os.path.isfile(os.path.normpath(scratch_dir + f)):
                     shutil.copy(f, os.path.normpath(scratch_dir + f))
+
+    def _init_samplebuffer(self):
+        self.samplebuffer = self.scratch_files[:]
+        random.shuffle(self.samplebuffer)
+        print(f"Initialized self.samplebuffer: {self.samplebuffer}")
+        print(f"Scratch files after samplebuffer init: {self.scratch_files}")
 
     def __iter__(self):
         for path in self.scratch_files:
@@ -243,18 +256,80 @@ class NumpyPathDataset:
         dataset1.npy_files = self.npy_files[0:index]
         dataset2.npy_files = self.npy_files[index:]
 
+        dataset1._init_samplebuffer()
+        dataset2._init_samplebuffer()
+
         return dataset1, dataset2
+  
+    def batch(self, batch_size, auto_repeat = True, verbose=False):
+        """Returns a batch of numpy arrays from the sample buffer.
+        Parameters:
+            batch_size: size of the batch that should be returned
+            auto_repeat: automatically call NumpyPathDataset.repeat() to refill the sample buffer with the contents of self.scratch_files (in randomized order).
+            verbose: will print the path names for the batches. Typically only for debugging.
+        """
 
+        batch_loc = np.random.randint(0, len(self) - batch_size)
+        batch_paths = self[batch_loc: batch_loc + batch_size]
+        if verbose:
+            print("Got batch with files:")
+            for path in batch_paths:
+                print(path)
+        batch = np.stack([np.load(path) for path in batch_paths])
+        batch = batch[:, np.newaxis, ...]
 
+        return batch
 
+    def _load_batch_from_filelist(self, batch_paths):
+        """Takes a list of numpy files, loads the numpy files, stacks them, and inserts an extra color channel"""
 
+        batch = np.stack([np.load(path) for path in batch_paths])
+        batch = batch[:, np.newaxis, ...]
+
+        return batch
+
+    def batch_new(self, batch_size, auto_repeat = True, verbose=False):
+        """Returns a batch of numpy arrays from the sample buffer.
+        Parameters:
+            batch_size: size of the batch that should be returned
+            auto_repeat: automatically call NumpyPathDataset.repeat() to refill the sample buffer with the contents of self.scratch_files (in randomized order).
+            verbose: will print the path names for the batches. Typically only for debugging.
+        """
+        if batch_size > len(self.samplebuffer):
+            if auto_repeat:
+                print("Samplebuffer before repeat:")
+                self.print_samplebuffer()
+                self.repeat()
+                print("Samplebuffer after repeat:")
+                self.print_samplebuffer()
+                print(f"Scratch files after repeat: {self.scratch_files}")
+
+                # Call batch_new again, since in theory if batch_size >> len(self.scratch_files), the samplebuffer may need to be extended multiple times
+                return self.batch_new(batch_size, auto_repeat, verbose)
+            else:
+                # Just return whatever is left. Note that this will be fewer samples than the specified batch_size and may cause problems in the code
+                return self._load_batch_from_filelist(self.samplebuffer)
+        else:
+            # First part of the samplebuffer becomes the batch, the rest becomes the new samplebuffer
+            batch_paths = self.samplebuffer[0:batch_size]
+            print("Next batch:")
+            for element in batch_paths:
+                print(element)
+            self.samplebuffer = self.samplebuffer[batch_size:]
+            print("Samplebuffer after batch:")
+            self.print_samplebuffer()
+
+            return self._load_batch_from_filelist(batch_paths)
         
-        
-    # def get_training_batch(self, batch_size):
-    #     """Returns a batch of numpy arrays. Arrays are randomly selected from the training samples of this dataset.
-    #     Parameters:
-    #         batch_size: size of the batch that should be returned
-    #     """
+    def repeat(self):
+        """Repeat the dataset. Will be called internally once the dataset runs out of samples if auto_repeat is set."""
+        new_samplebuffer = self.scratch_files[:]
+        random.shuffle(new_samplebuffer)
+        self.samplebuffer.extend(new_samplebuffer)
+
+    def print_samplebuffer(self):
+        for path in self.samplebuffer:
+            print(path)
 
 # class CachedDataset:
 #     """This will replace the NumpyPathDataset. 
@@ -316,3 +391,32 @@ class NumpyPathDataset:
 
 #     def __len__(self):
 #         return len(self.scratch_files)
+
+## This file can be tested by calling it directly
+if __name__ == "__main__":
+
+    import os
+    import numpy as np
+
+    a=np.zeros([5, 16, 16])
+    
+    scratch = os.path.join(os.getenv('TMPDIR'), os.getenv('USER'))
+    savepath = os.path.join(scratch, 'datadir/')
+
+    os.makedirs(savepath, exist_ok = True)
+
+    # Create 10 dummy files
+    for i in range(10):
+        filename = os.path.join(savepath, str(i).zfill(3) + '.npy')
+        np.save(filename, a)
+
+    print(f"Savepath: {savepath}")
+    npy_data = NumpyPathDataset(savepath, scratch, True, True)
+
+    npy_data.batch(4, True, True)
+
+    print("Calling batch_new")
+    npy_data.batch_new(7, True, True)
+    
+    print("Calling batch_new")
+    npy_data.batch_new(7, True, True)

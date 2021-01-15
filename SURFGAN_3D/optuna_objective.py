@@ -4,6 +4,7 @@ import tensorflow as tf
 import horovod.tensorflow as hvd
 import time
 import random
+import logging
 
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
@@ -222,6 +223,14 @@ def optuna_objective(trial, args, config):
             g_lr,
             d_lr
         )
+        # This is only computed on the validation dataset
+        summary_small_validation = summary.create_small_validation_summary(
+            disc_loss,
+            gen_loss,
+            gp_loss,
+            gen_sample,
+            real_image_input,
+        )
         summary_large = summary.create_large_summary(
             real_image_input,
             gen_sample
@@ -309,12 +318,14 @@ def optuna_objective(trial, args, config):
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
                 # Get randomly selected batch
-                batch_loc = np.random.randint(0, len(npy_data) - batch_size)
-                batch_paths = npy_data[batch_loc: batch_loc + batch_size]
-                batch = np.stack([np.load(path) for path in batch_paths])
-                batch = batch[:, np.newaxis, ...]
+                # batch_loc = np.random.randint(0, len(npy_data) - batch_size)
+                # batch_paths = npy_data[batch_loc: batch_loc + batch_size]
+                # batch = np.stack([np.load(path) for path in batch_paths])
+                # batch = batch[:, np.newaxis, ...]
 
-                # Normalize data (byt only if args.data_mean AND args.data_stddev are defined)
+                batch = npy_data_train.batch(batch_size)
+            
+                # Normalize data (but only if args.data_mean AND args.data_stddev are defined)
                 batch = data.normalize_numpy(batch, args.data_mean, args.data_stddev, verbose)
 
                 # if args.horovod:
@@ -331,6 +342,8 @@ def optuna_objective(trial, args, config):
                 small_summary_bool = (local_step % args.summary_small_every_nsteps == 0)
                 large_summary_bool = (local_step % args.summary_large_every_nsteps == 0)
                 metrics_summary_bool = (local_step % args.metrics_every_nsteps == 0)
+
+                # Run training step, including summaries
                 if large_summary_bool:
                     _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, summary_small, summary_large,
@@ -343,6 +356,13 @@ def optuna_objective(trial, args, config):
                     _, _, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, disc_loss, gen_loss],
                          feed_dict={real_image_input: batch})
+
+                # Run validation loss
+                if large_summary_bool or small_summary_bool:
+                    batch_val = npy_data_validation.batch(batch_size)
+                    batch_val = data.normalize_numpy(batch_val, args.data_mean, args.data_stddev, verbose)
+                    summary_s_val = sess.run(summary_small_validation, feed_dict={real_image_input: batch_val})
+
                 #print("Completed step")
                 global_step += batch_size * global_size
                 local_step += 1
@@ -361,9 +381,7 @@ def optuna_objective(trial, args, config):
                     if args.calc_metrics:
                         # if verbose:
                             # print('Computing and writing metrics...')
-                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose)
-
-
+                        metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
@@ -379,10 +397,12 @@ def optuna_objective(trial, args, config):
                     if large_summary_bool:
                         print('Writing large summary...')
                         writer.add_summary(summary_s, global_step)
+                        writer.add_summary(summary_s_val, global_step)
                         writer.add_summary(summary_l, global_step)
                     elif small_summary_bool:
                         print('Writing small summary...')
                         writer.add_summary(summary_s, global_step)
+                        writer.add_summary(summary_s_val, global_step)
                     elif speed_measurement_bool:
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
