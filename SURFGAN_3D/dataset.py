@@ -271,7 +271,7 @@ class NumpyPathDataset:
             if auto_repeat:
                 self.repeat()
                 # Call batch_new again, since in theory if batch_size >> len(self.scratch_files), the samplebuffer may need to be extended multiple times
-                return self.batch_new(batch_size, auto_repeat, verbose)
+                return self.batch(batch_size, auto_repeat, verbose)
             else:
                 # Just return whatever is left in the samplebuffer. Note that this will be fewer samples than the specified batch_size and may cause problems in the code
                 batch_paths = self.samplebuffer
