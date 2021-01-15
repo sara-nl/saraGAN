@@ -43,7 +43,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
     compute_metrics: dictionary of bool
         Uses the keys 'compute_<metric>' with <metric> being swds, ssims, FID, psnrs, mses, nrmses and specifies booleans for whether or not that metric should be computed
     num_metric_samples : int
-        Number of batches to compute the metrics on. Metrics are averaged over these batches. Limit is set on the global number of processed batches if Horovod is used.
+        Number of samples to compute the metrics on. Metrics are averaged over these batches. Limit is set on the global number of processed batches if Horovod is used.
     data_mean: float
         Mean of the dataset. Used to normalize data (if provided)
     data_stddev: float
@@ -85,11 +85,18 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
         real_batch = real_batch[:, np.newaxis, ...].astype(np.float32)
         # Here, we normalize the numpy data, i.e. we don't normalize as part of the graph. (since most metrics are computed with pure numpy, not with TF)
         real_batch = data.normalize_numpy(real_batch, data_mean, data_stddev, verbose)
-        fake_batch = sess.run(gen_sample).astype(np.float32)
+        fake_batch = []
+        # Fake images are always generated with the batch size used for training
+        # Here, we loop often enough to make sure we have enough samples for the batch size that we want to use for metric computation
+        for i in range( int(np.ceil(batch_size / gen_sample.get_shape().as_list()[0])) ):
+            fake_batch.append(sess.run(gen_sample).astype(np.float32))
+        fake_batch = np.concatenate(fake_batch)
+        # Finally, since batch_size / gen_sample.get_shape().as_list()[0]) may be non-integer, we discard any excess generated images:
+        fake_batch = fake_batch[0:batch_size, ...]
 
         if verbose:
             print('Real shape', real_batch.shape)
-            print('Fake shape', real_batch.shape)
+            print('Fake shape', fake_batch.shape)
             print('real min, max', real_batch.min(), real_batch.max())
             print('fake min, max', fake_batch.min(), fake_batch.max())
 
