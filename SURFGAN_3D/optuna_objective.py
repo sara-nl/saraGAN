@@ -432,7 +432,28 @@ def optuna_objective(trial, args, config):
                 sess.run(ema_update_weights)
                 saver = tf.train.Saver(var_list)
                 print("Writing final checkpoint file: model_{phase}")
-                saver.save(sess, os.path.join(logdir, f'model_{phase}'))
+                saver.save(sess, os.path.join(logdir, f'model_{phase}'))   
+
+                print(f"Computing final metrics for phase {phase} on the training, validation and test set...")
+                start_metrics_test = time.time()
+                metrics_test = save_metrics(None, sess, npy_data_test, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_test), args.data_mean, args.data_stddev, verbose)
+                end_metrics_test = time.time()
+                print(f"Computing metrics on test set took {end_metrics_test - start_metrics_test} seconds")
+                print("Test dataset metrics:")
+                print(metrics_test)
+                start_metrics_val = time.time()
+                metrics_val = save_metrics(None, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_validation), args.data_mean, args.data_stddev, verbose)
+                end_metrics_val = time.time()
+                print(f"Computing metrics on validation set took {end_metrics_val - start_metrics_val} seconds")
+                print("Validation dataset metrics:")
+                print(metrics_val)
+                start_metrics_train = time.time()
+                metrics_train = save_metrics(None, sess, npy_data_train, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_train), args.data_mean, args.data_stddev, verbose)
+                end_metrics_train = time.time()
+                print(f"Computing metrics on training set took {end_metrics_train - start_metrics_train} seconds")
+                print("Training dataset metrics:")
+                print(metrics_train)
+
 
             if args.ending_phase:
                 if phase == args.ending_phase:
