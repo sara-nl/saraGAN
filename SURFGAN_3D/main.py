@@ -143,7 +143,7 @@ if __name__ == '__main__':
     parser.add_argument('--summary_large_every_nsteps', default=64, type=int, help="Large summaries such as images are saved every time the locally processed image counter is a multiple of this number")
     parser.add_argument('--num_metric_samples', type=int, default=None, help="Number of samples used to compute the metrics are computed. A higher number of samples will be more accurate (show less variation in metrics between iterations), but take more time to compute.")
     parser.add_argument('--metrics_every_nsteps', default=128, type=int, help="Metrics are computed every time the locally processed image counter is a multiple of this number")
-    parser.add_arguemnt('--metrics_batch_size', default=16, type=int, help="Batch size used for computing the metrics. Note that metrics computation is often a lot lighter than training, so memory limits are less like to be a problem.")
+    parser.add_argument('--metrics_batch_size', default=16, type=int, help="Batch size used for computing the metrics. Note that metrics computation is often a lot lighter than training, so memory limits are less like to be a problem.")
     # parser.add_argument('--load_phase', default=None, type=int)
     parser.add_argument('--compute_FID', default=False, action='store_true', help="Whether to compute the Frechet Inception Distance (frequency determined by metrics_every_nsteps)")
     parser.add_argument('--compute_swds', default=False, action='store_true', help="Whether to compute the Sliced Wasserstein Distance (frequency determined by metrics_every_nsteps)")
