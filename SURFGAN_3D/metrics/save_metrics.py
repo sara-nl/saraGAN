@@ -23,7 +23,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
     Parameters:
     -----------
     writer : tf.summary.FileWriter
-        The summary filewriter that will store the metrics
+        The summary filewriter that will store the metrics. Pass 'None' to compute the metrcis and return them as dictionary, but not store them.
     sess : tf.session
         The TensorFlow session with which to compute the metrics
     npy_data : array
@@ -81,8 +81,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
         else:
             start_loc = 0
 
-        real_batch = np.stack([np.load(npy_data[i]) for i in range(start_loc, start_loc + batch_size)])
-        real_batch = real_batch[:, np.newaxis, ...].astype(np.float32)
+        real_batch = npy_data.batch(batch_size)
         # Here, we normalize the numpy data, i.e. we don't normalize as part of the graph. (since most metrics are computed with pure numpy, not with TF)
         real_batch = data.normalize_numpy(real_batch, data_mean, data_stddev, verbose)
         fake_batch = []
@@ -233,7 +232,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
 
 
         # Finally, write the full summary
-        if len(summary_metrics) > 0:
+        if len(summary_metrics) > 0 and writer is not None:
             try:
                 summary_metrics = tf.get_default_graph().get_tensor_by_name("metrics/summary_metrics/summary_metrics:0")
             except:
