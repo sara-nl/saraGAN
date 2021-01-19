@@ -192,7 +192,7 @@ def num_filters(phase, num_phases, base_shape, base_dim=None, size=None):
     # Take base_shape[1:] to cut of the number of input channels:
     # We want to determine number of filters based on spatial number of voxels; channels are irrelevant
     current_dim = [2 ** (phase - 1) * dim for dim in base_shape[1:]]
-    print(f"DEBUG: base_shape={base_shape}, phase={phase}, current_dim={current_dim}")
+    # print(f"DEBUG: base_shape={base_shape}, phase={phase}, current_dim={current_dim}")
     log_product = np.log2(np.product(current_dim))
     # Filter lists were designed for dimensions where the 2-log is [4, 7, 10, ...]
     reference_log = [4 + n * 3 for n in range(0,7)]
@@ -201,7 +201,7 @@ def num_filters(phase, num_phases, base_shape, base_dim=None, size=None):
     # to 10, thus I get the third element from filter_list as the number of filters.
     index = np.argmin(np.abs(np.array(reference_log)-log_product))
     filters = filter_list[index]
-    print(f"DEBUG: log_product={log_product}, index={index}, filters={filters}")
+    # print(f"DEBUG: log_product={log_product}, index={index}, filters={filters}")
     # filters = filter_list[phase - 1]
 # print(f"DEBUG: returning num_filters: {filters}")
     return filters
