@@ -89,9 +89,10 @@ def optuna_objective(trial, args, config):
         # That may or may not make much sense, depending on whether there is correlation between your samples!
         # For the medical CT scans there was: some scans are from the same patient, and usually have consequtive numbering.
         # By splitting this way, we avoid as much as possible that correlated scans end up in both training and validation sets.
-        npy_data_train, npy_data_testval = npy_data.split_by_fraction(0.8) # Use 80% for training
-        npy_data_validation, npy_data_test = npy_data_testval.split_by_fraction(0.5) # Split remaining 20% into two blocks of 10% for validation and testing
-        #TODO: replace all instances of npy_data elsewhere in the code by npy_data_train and npy_data_validation, and npy_data_test
+        npy_data_train, npy_data_testval = npy_data.split_by_fraction(1 - (args.validation_fraction + args.test_fraction))
+        npy_data_validation, npy_data_test = npy_data_testval.split_by_fraction(args.validation_fraction / (args.validation_fraction + args.test_fraction))
+        if verbose:
+            print(f"Split dataset of {len(npy_data)} samples: train {len(npy_data_train)}, validation {len(npy_data_validation)}, test {len(npy_data_test)}")
 
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
@@ -318,11 +319,6 @@ def optuna_objective(trial, args, config):
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
                 # Get randomly selected batch
-                # batch_loc = np.random.randint(0, len(npy_data) - batch_size)
-                # batch_paths = npy_data[batch_loc: batch_loc + batch_size]
-                # batch = np.stack([np.load(path) for path in batch_paths])
-                # batch = batch[:, np.newaxis, ...]
-
                 batch = npy_data_train.batch(batch_size)
             
                 # Normalize data (but only if args.data_mean AND args.data_stddev are defined)
@@ -432,27 +428,35 @@ def optuna_objective(trial, args, config):
                 sess.run(ema_update_weights)
                 saver = tf.train.Saver(var_list)
                 print("Writing final checkpoint file: model_{phase}")
-                saver.save(sess, os.path.join(logdir, f'model_{phase}'))   
+                saver.save(sess, os.path.join(logdir, f'model_{phase}'))
 
-                print(f"Computing final metrics for phase {phase} on the training, validation and test set...")
-                start_metrics_test = time.time()
-                metrics_test = save_metrics(None, sess, npy_data_test, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_test), args.data_mean, args.data_stddev, verbose)
-                end_metrics_test = time.time()
-                print(f"Computing metrics on test set took {end_metrics_test - start_metrics_test} seconds")
-                print("Test dataset metrics:")
-                print(metrics_test)
-                start_metrics_val = time.time()
-                metrics_val = save_metrics(None, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_validation), args.data_mean, args.data_stddev, verbose)
-                end_metrics_val = time.time()
-                print(f"Computing metrics on validation set took {end_metrics_val - start_metrics_val} seconds")
-                print("Validation dataset metrics:")
-                print(metrics_val)
-                start_metrics_train = time.time()
-                metrics_train = save_metrics(None, sess, npy_data_train, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_train), args.data_mean, args.data_stddev, verbose)
-                end_metrics_train = time.time()
-                print(f"Computing metrics on training set took {end_metrics_train - start_metrics_train} seconds")
-                print("Training dataset metrics:")
-                print(metrics_train)
+                # Final metric computation is not parallelized, because we want it to be computed on all samples from the test set, without duplicates.
+                # Since the sampling is random for each worker, doing this with all workers could result in some samples being seen by multiple times, with others not being seen at all.
+                # Set horovod to False explicitely, otherwise rank 0 will wait forever for a response from the other ranks.
+                print(f"Computing final metrics for phase {phase} ...")
+                if args.compute_metrics_test:
+                    start_metrics_test = time.time()
+                    metrics_test = save_metrics(None, sess, npy_data_test, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), False, get_compute_metrics_dict(args), len(npy_data_test), args.data_mean, args.data_stddev, verbose)
+                    end_metrics_test = time.time()
+                    print(f"Computing metrics on test set took {end_metrics_test - start_metrics_test} seconds")
+                    print("Test dataset metrics:")
+                    print(metrics_test)
+                if args.compute_metrics_validation:
+                    start_metrics_val = time.time()
+                    metrics_val = save_metrics(None, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), False, get_compute_metrics_dict(args), len(npy_data_validation), args.data_mean, args.data_stddev, verbose)
+                    end_metrics_val = time.time()
+                    print(f"Computing metrics on validation set took {end_metrics_val - start_metrics_val} seconds")
+                    print("Validation dataset metrics:")
+                    print(metrics_val)
+                    # Overwrite the last fid
+                    last_fid = metrics['FID']
+                if args.compute_metrics_train:
+                    start_metrics_train = time.time()
+                    metrics_train = save_metrics(None, sess, npy_data_train, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), False, get_compute_metrics_dict(args), len(npy_data_train), args.data_mean, args.data_stddev, verbose)
+                    end_metrics_train = time.time()
+                    print(f"Computing metrics on training set took {end_metrics_train - start_metrics_train} seconds")
+                    print("Training dataset metrics:")
+                    print(metrics_train)
 
 
             if args.ending_phase:
