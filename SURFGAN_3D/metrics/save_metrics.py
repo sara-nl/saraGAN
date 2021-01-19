@@ -59,6 +59,9 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
     # Initialize metrics dictionary:
     metrics = {}
 
+    # If batch_size > num_metric_samples, reduce it to num_metric_samples
+    batch_size = min(batch_size, num_metric_samples)
+
     # To check timings for metric calculation. Hardcoded, because generally only needed for development...
     report_timings = False
 
@@ -76,28 +79,28 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
 
     counter = 0
     while True:
-        if horovod:
-            start_loc = counter + hvd.rank() * batch_size
-        else:
-            start_loc = 0
+        # if horovod:
+        #     start_loc = counter + hvd.rank() * batch_size
+        # else:
+        #     start_loc = 0
 
         real_batch = npy_data.batch(batch_size)
-        # Here, we normalize the numpy data, i.e. we don't normalize as part of the graph. (since most metrics are computed with pure numpy, not with TF)
         real_batch = data.normalize_numpy(real_batch, data_mean, data_stddev, verbose)
         fake_batch = []
         # Fake images are always generated with the batch size used for training
         # Here, we loop often enough to make sure we have enough samples for the batch size that we want to use for metric computation
-        for i in range( int(np.ceil(batch_size / gen_sample.get_shape().as_list()[0])) ):
-            fake_batch.append(sess.run(gen_sample).astype(np.float32))
-        fake_batch = np.concatenate(fake_batch)
-        # Finally, since batch_size / gen_sample.get_shape().as_list()[0]) may be non-integer, we discard any excess generated images:
+        fake_batch = sess.run(gen_sample).astype(np.float32)
+        while fake_batch.shape[0] < batch_size:
+            fake_batch = np.concatenate((fake_batch, sess.run(gen_sample).astype(np.float32)))
+
+        # Finally, since len(fake_batch) may now be larger than batch_size we discard any excess generated images:
         fake_batch = fake_batch[0:batch_size, ...]
 
-        if verbose:
-            print('Real shape', real_batch.shape)
-            print('Fake shape', fake_batch.shape)
-            print('real min, max', real_batch.min(), real_batch.max())
-            print('fake min, max', fake_batch.min(), fake_batch.max())
+        # if verbose:
+        #     print('Real shape', real_batch.shape)
+        #     print('Fake shape', fake_batch.shape)
+        #     print('real min, max', real_batch.min(), real_batch.max())
+        #     print('fake min, max', fake_batch.min(), fake_batch.max())
 
         if compute_metrics['compute_FID']:
             start = time.time()
@@ -229,7 +232,6 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
                     lod = 16 * 2 ** i
                     add_to_metric_summary(f'swd_{lod}', swds[i], summary_metrics, sess)
                 add_to_metric_summary(f'swd_mean', swds[-1], summary_metrics, sess)
-
 
         # Finally, write the full summary
         if len(summary_metrics) > 0 and writer is not None:
