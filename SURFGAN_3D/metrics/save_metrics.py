@@ -23,7 +23,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
     Parameters:
     -----------
     writer : tf.summary.FileWriter
-        The summary filewriter that will store the metrics
+        The summary filewriter that will store the metrics. Pass 'None' to compute the metrcis and return them as dictionary, but not store them.
     sess : tf.session
         The TensorFlow session with which to compute the metrics
     npy_data : array
@@ -43,7 +43,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
     compute_metrics: dictionary of bool
         Uses the keys 'compute_<metric>' with <metric> being swds, ssims, FID, psnrs, mses, nrmses and specifies booleans for whether or not that metric should be computed
     num_metric_samples : int
-        Number of batches to compute the metrics on. Metrics are averaged over these batches. Limit is set on the global number of processed batches if Horovod is used.
+        Number of samples to compute the metrics on. Metrics are averaged over these batches. Limit is set on the global number of processed batches if Horovod is used.
     data_mean: float
         Mean of the dataset. Used to normalize data (if provided)
     data_stddev: float
@@ -58,6 +58,9 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
 
     # Initialize metrics dictionary:
     metrics = {}
+
+    # If batch_size > num_metric_samples, reduce it to num_metric_samples
+    batch_size = min(batch_size, num_metric_samples)
 
     # To check timings for metric calculation. Hardcoded, because generally only needed for development...
     report_timings = False
@@ -76,22 +79,28 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
 
     counter = 0
     while True:
-        if horovod:
-            start_loc = counter + hvd.rank() * batch_size
-        else:
-            start_loc = 0
+        # if horovod:
+        #     start_loc = counter + hvd.rank() * batch_size
+        # else:
+        #     start_loc = 0
 
-        real_batch = np.stack([np.load(npy_data[i]) for i in range(start_loc, start_loc + batch_size)])
-        real_batch = real_batch[:, np.newaxis, ...].astype(np.float32)
-        # Here, we normalize the numpy data, i.e. we don't normalize as part of the graph. (since most metrics are computed with pure numpy, not with TF)
+        real_batch = npy_data.batch(batch_size)
         real_batch = data.normalize_numpy(real_batch, data_mean, data_stddev, verbose)
+        fake_batch = []
+        # Fake images are always generated with the batch size used for training
+        # Here, we loop often enough to make sure we have enough samples for the batch size that we want to use for metric computation
         fake_batch = sess.run(gen_sample).astype(np.float32)
+        while fake_batch.shape[0] < batch_size:
+            fake_batch = np.concatenate((fake_batch, sess.run(gen_sample).astype(np.float32)))
 
-        if verbose:
-            print('Real shape', real_batch.shape)
-            print('Fake shape', real_batch.shape)
-            print('real min, max', real_batch.min(), real_batch.max())
-            print('fake min, max', fake_batch.min(), fake_batch.max())
+        # Finally, since len(fake_batch) may now be larger than batch_size we discard any excess generated images:
+        fake_batch = fake_batch[0:batch_size, ...]
+
+        # if verbose:
+        #     print('Real shape', real_batch.shape)
+        #     print('Fake shape', fake_batch.shape)
+        #     print('real min, max', real_batch.min(), real_batch.max())
+        #     print('fake min, max', fake_batch.min(), fake_batch.max())
 
         if compute_metrics['compute_FID']:
             start = time.time()
@@ -224,9 +233,8 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
                     add_to_metric_summary(f'swd_{lod}', swds[i], summary_metrics, sess)
                 add_to_metric_summary(f'swd_mean', swds[-1], summary_metrics, sess)
 
-
         # Finally, write the full summary
-        if len(summary_metrics) > 0:
+        if len(summary_metrics) > 0 and writer is not None:
             try:
                 summary_metrics = tf.get_default_graph().get_tensor_by_name("metrics/summary_metrics/summary_metrics:0")
             except:

@@ -4,6 +4,7 @@ import tensorflow as tf
 import horovod.tensorflow as hvd
 import time
 import random
+import logging
 
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
@@ -83,7 +84,15 @@ def optuna_objective(trial, args, config):
 
         # Get NumpyPathDataset object for current phase. It's an iterable object that returns the path to samples in the dataset
         npy_data = get_numpy_dataset(phase, args.starting_phase, args.start_shape, args.dataset_path, args.scratch_path, verbose)
-        # TODO: we should probably split the npy_data in a train and validation set. The validation set can then be passed to save_metrics to compute the metrics on.
+
+        # Note: the split below preserves the ordering of npy_data. Thus, similar filenames tend to either end up all in the training or validation set.
+        # That may or may not make much sense, depending on whether there is correlation between your samples!
+        # For the medical CT scans there was: some scans are from the same patient, and usually have consequtive numbering.
+        # By splitting this way, we avoid as much as possible that correlated scans end up in both training and validation sets.
+        npy_data_train, npy_data_testval = npy_data.split_by_fraction(1 - (args.validation_fraction + args.test_fraction))
+        npy_data_validation, npy_data_test = npy_data_testval.split_by_fraction(args.validation_fraction / (args.validation_fraction + args.test_fraction))
+        if verbose:
+            print(f"Split dataset of {len(npy_data)} samples: train {len(npy_data_train)}, validation {len(npy_data_validation)}, test {len(npy_data_test)}")
 
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
@@ -215,6 +224,14 @@ def optuna_objective(trial, args, config):
             g_lr,
             d_lr
         )
+        # This is only computed on the validation dataset
+        summary_small_validation = summary.create_small_validation_summary(
+            disc_loss,
+            gen_loss,
+            gp_loss,
+            gen_sample,
+            real_image_input,
+        )
         summary_large = summary.create_large_summary(
             real_image_input,
             gen_sample
@@ -302,12 +319,9 @@ def optuna_objective(trial, args, config):
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
                 # Get randomly selected batch
-                batch_loc = np.random.randint(0, len(npy_data) - batch_size)
-                batch_paths = npy_data[batch_loc: batch_loc + batch_size]
-                batch = np.stack([np.load(path) for path in batch_paths])
-                batch = batch[:, np.newaxis, ...]
-
-                # Normalize data (byt only if args.data_mean AND args.data_stddev are defined)
+                batch = npy_data_train.batch(batch_size)
+            
+                # Normalize data (but only if args.data_mean AND args.data_stddev are defined)
                 batch = data.normalize_numpy(batch, args.data_mean, args.data_stddev, verbose)
 
                 # if args.horovod:
@@ -324,6 +338,8 @@ def optuna_objective(trial, args, config):
                 small_summary_bool = (local_step % args.summary_small_every_nsteps == 0)
                 large_summary_bool = (local_step % args.summary_large_every_nsteps == 0)
                 metrics_summary_bool = (local_step % args.metrics_every_nsteps == 0)
+
+                # Run training step, including summaries
                 if large_summary_bool:
                     _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, summary_small, summary_large,
@@ -336,6 +352,13 @@ def optuna_objective(trial, args, config):
                     _, _, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, disc_loss, gen_loss],
                          feed_dict={real_image_input: batch})
+
+                # Run validation loss
+                if large_summary_bool or small_summary_bool:
+                    batch_val = npy_data_validation.batch(batch_size)
+                    batch_val = data.normalize_numpy(batch_val, args.data_mean, args.data_stddev, verbose)
+                    summary_s_val = sess.run(summary_small_validation, feed_dict={real_image_input: batch_val})
+
                 #print("Completed step")
                 global_step += batch_size * global_size
                 local_step += 1
@@ -354,9 +377,7 @@ def optuna_objective(trial, args, config):
                     if args.calc_metrics:
                         # if verbose:
                             # print('Computing and writing metrics...')
-                        metrics = save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose)
-
-
+                        metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
@@ -372,10 +393,12 @@ def optuna_objective(trial, args, config):
                     if large_summary_bool:
                         print('Writing large summary...')
                         writer.add_summary(summary_s, global_step)
+                        writer.add_summary(summary_s_val, global_step)
                         writer.add_summary(summary_l, global_step)
                     elif small_summary_bool:
                         print('Writing small summary...')
                         writer.add_summary(summary_s, global_step)
+                        writer.add_summary(summary_s_val, global_step)
                     elif speed_measurement_bool:
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
@@ -406,6 +429,35 @@ def optuna_objective(trial, args, config):
                 saver = tf.train.Saver(var_list)
                 print("Writing final checkpoint file: model_{phase}")
                 saver.save(sess, os.path.join(logdir, f'model_{phase}'))
+
+                # Final metric computation is not parallelized, because we want it to be computed on all samples from the test set, without duplicates.
+                # Since the sampling is random for each worker, doing this with all workers could result in some samples being seen by multiple times, with others not being seen at all.
+                # Set horovod to False explicitely, otherwise rank 0 will wait forever for a response from the other ranks.
+                print(f"Computing final metrics for phase {phase} ...")
+                if args.compute_metrics_test:
+                    start_metrics_test = time.time()
+                    metrics_test = save_metrics(None, sess, npy_data_test, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), False, get_compute_metrics_dict(args), len(npy_data_test), args.data_mean, args.data_stddev, verbose)
+                    end_metrics_test = time.time()
+                    print(f"Computing metrics on test set took {end_metrics_test - start_metrics_test} seconds")
+                    print("Test dataset metrics:")
+                    print(metrics_test)
+                if args.compute_metrics_validation:
+                    start_metrics_val = time.time()
+                    metrics_val = save_metrics(None, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), False, get_compute_metrics_dict(args), len(npy_data_validation), args.data_mean, args.data_stddev, verbose)
+                    end_metrics_val = time.time()
+                    print(f"Computing metrics on validation set took {end_metrics_val - start_metrics_val} seconds")
+                    print("Validation dataset metrics:")
+                    print(metrics_val)
+                    # Overwrite the last fid
+                    last_fid = metrics['FID']
+                if args.compute_metrics_train:
+                    start_metrics_train = time.time()
+                    metrics_train = save_metrics(None, sess, npy_data_train, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), False, get_compute_metrics_dict(args), len(npy_data_train), args.data_mean, args.data_stddev, verbose)
+                    end_metrics_train = time.time()
+                    print(f"Computing metrics on training set took {end_metrics_train - start_metrics_train} seconds")
+                    print("Training dataset metrics:")
+                    print(metrics_train)
+
 
             if args.ending_phase:
                 if phase == args.ending_phase:

@@ -7,6 +7,11 @@ import tensorflow as tf
 import multiprocessing
 import itertools
 import psutil
+import copy
+import random
+
+# TEMPORARY, only for debugging:
+import horovod.tensorflow as hvd
 
 def stdnormal_to_8bit_numpy(normalized_input, verbose):
     """Maps standard normalized channels (mean=0, stddev=1) to 8-bit channels ([0,255]).
@@ -154,6 +159,8 @@ class NumpyDataset:
         return len(self.npy_files)
 
 
+# TODO: create init based on filelist (a glob-like object). This way, we can easily split a glob-like object into training/validation/test parts,
+# and create training/validation/test NumpyPathDataset for each of those.
 class NumpyPathDataset:
     def __init__(self, npy_dir, scratch_dir, copy_files, is_correct_phase):
         super(NumpyPathDataset, self).__init__()
@@ -165,13 +172,7 @@ class NumpyPathDataset:
                 scratch_dir = scratch_dir[:-1]
 
         self.scratch_dir = os.path.normpath(scratch_dir + npy_dir) if is_correct_phase else npy_dir
-        if copy_files and is_correct_phase:
-            os.makedirs(self.scratch_dir, exist_ok=True)
-            print("Copying files to scratch...")
-            for f in self.npy_files:
-                # os.path.isdir(self.scratch_dir)
-                if not os.path.isfile(os.path.normpath(scratch_dir + f)):
-                    shutil.copy(f, os.path.normpath(scratch_dir + f))
+        self._copy_files_to_scratch(scratch_dir, copy_files, is_correct_phase)
 
         while len(glob.glob(self.scratch_dir + '/*.npy')) < len(self.npy_files):
             time.sleep(1)
@@ -179,10 +180,30 @@ class NumpyPathDataset:
         self.scratch_files = glob.glob(self.scratch_dir + '/*.npy')
         assert len(self.scratch_files) == len(self.npy_files)
 
+        # Initialize the samplebuffer
+        self._init_samplebuffer()
+
         test_npy_array = np.load(self.scratch_files[0])[np.newaxis, ...]
         self.shape = test_npy_array.shape
         self.dtype = test_npy_array.dtype
         del test_npy_array
+
+        # TODO: Split the dataset into a test and training set (add arguments to __init__ to determine the fractions, then use those in get_training_batch to randomly select samples from the first X% of the dataset)
+
+    def _copy_files_to_scratch(self, scratch_dir, copy_files, is_correct_phase):
+        if copy_files and is_correct_phase:
+            print(f"Scratch dir: {self.scratch_dir}")
+            os.makedirs(self.scratch_dir, exist_ok=True)
+            print("Copying files to scratch...")
+            for f in self.npy_files:
+                # os.path.isdir(self.scratch_dir)
+                if not os.path.isfile(os.path.normpath(scratch_dir + f)):
+                    shutil.copy(f, os.path.normpath(scratch_dir + f))
+
+    def _init_samplebuffer(self):
+        # Note: the [:] on self.scratch_files is needed to make sure the list gets duplicated - otherwise self.scratch_files will also get shuffled
+        self.samplebuffer = self.scratch_files[:]
+        random.shuffle(self.samplebuffer)
 
     def __iter__(self):
         for path in self.scratch_files:
@@ -194,3 +215,111 @@ class NumpyPathDataset:
     def __len__(self):
         return len(self.scratch_files)
 
+    def split_by_fraction(self, fraction):
+        """Split this NumpyPathDataset object into multiple NumpyPathDataset objects, according to provided ratios. E.g. for creating a train, validation and test set.
+        Parameters:
+            fraction: fraction according to which to split the dataset. E.g. 0.7 will return a one dataset with 70% of the original samples, and another with 30%.
+        Returns:
+            dataset1, dataset2: two NumpyPathDataset objects
+        """
+
+        nsamples_dataset1 = int( np.round(fraction*len(self.scratch_files)) + 1e-5)
+        nsamples_dataset2 = len(self.scratch_files)
+
+        # If the number of computed samples for either dataset isn't at least 1, something most likely went wrong
+        assert nsamples_dataset1 > 0 and nsamples_dataset2 > 0
+
+        return self.split_by_index(nsamples_dataset1)
+    
+    def split_by_index(self, index):
+        """Split this NumpyPathDataset object into multiple NumpyPathDataset objects, according to provided index. E.g. for creating a train, validation and test set.
+        Parameters:
+            index: index to the self.scratch_files array that will determine the last sample that is part of dataset1. index+1 will be the first sample of dataset2.
+        Returns:
+            dataset1, dataset2: two NumpyPathDataset objects
+        """
+        dataset1 = copy.deepcopy(self)
+        dataset2 = copy.deepcopy(self)
+
+        dataset1.scratch_files = self.scratch_files[0:index]
+        dataset2.scratch_files = self.scratch_files[index:]
+    
+        dataset1.npy_files = self.npy_files[0:index]
+        dataset2.npy_files = self.npy_files[index:]
+
+        dataset1._init_samplebuffer()
+        dataset2._init_samplebuffer()
+
+        return dataset1, dataset2
+  
+    def _load_batch_from_filelist(self, batch_paths):
+        """Takes a list of numpy files, loads the numpy files, stacks them, and inserts an extra color channel"""
+
+        batch = np.stack([np.load(path) for path in batch_paths])
+        batch = batch[:, np.newaxis, ...]
+
+        return batch
+
+    def batch(self, batch_size, auto_repeat = True, verbose=False):
+        """Returns a batch of numpy arrays from the sample buffer.
+        Parameters:
+            batch_size: size of the batch that should be returned
+            auto_repeat: automatically call NumpyPathDataset.repeat() to refill the sample buffer with the contents of self.scratch_files (in randomized order).
+            verbose: will print the path names for the batches. Typically only for debugging.
+        """
+        if batch_size > len(self.samplebuffer):
+            if auto_repeat:
+                self.repeat()
+                # Call batch_new again, since in theory if batch_size >> len(self.scratch_files), the samplebuffer may need to be extended multiple times
+                return self.batch(batch_size, auto_repeat, verbose)
+            else:
+                # Just return whatever is left in the samplebuffer. Note that this will be fewer samples than the specified batch_size and may cause problems in the code
+                batch_paths = self.samplebuffer
+        else:
+            # First part of the samplebuffer becomes the batch, the rest becomes the new samplebuffer
+            batch_paths = self.samplebuffer[0:batch_size]
+            self.samplebuffer = self.samplebuffer[batch_size:]
+        
+        if verbose:
+            print("Got batch:")
+            for element in batch_paths:
+                print(element)
+
+        return self._load_batch_from_filelist(batch_paths)
+        
+    def repeat(self):
+        """Repeat the dataset. Will be called internally once the dataset runs out of samples if auto_repeat is set."""
+        # Note: the [:] on self.scratch_files is needed to make sure the list gets duplicated - otherwise self.scratch_files will also get shuffled
+        new_samplebuffer = self.scratch_files[:]
+        random.shuffle(new_samplebuffer)
+        self.samplebuffer.extend(new_samplebuffer)
+
+    def print_samplebuffer(self):
+        for path in self.samplebuffer:
+            print(path)
+
+
+## This file can be tested by calling it directly
+if __name__ == "__main__":
+
+    import os
+    import numpy as np
+
+    a=np.zeros([5, 16, 16])
+    
+    scratch = os.path.join(os.getenv('TMPDIR'), os.getenv('USER'))
+    savepath = os.path.join(scratch, 'datadir/')
+
+    os.makedirs(savepath, exist_ok = True)
+
+    # Create 10 dummy files
+    for i in range(10):
+        filename = os.path.join(savepath, str(i).zfill(3) + '.npy')
+        np.save(filename, a)
+
+    print(f"Savepath: {savepath}")
+    npy_data = NumpyPathDataset(savepath, scratch, True, True)
+
+    npy_data.batch(7, True, True)
+    
+    npy_data.batch(7, True, True)

@@ -109,7 +109,7 @@ def scale_lr(g_lr, d_lr, g_scaling, d_scaling, horovod):
     return g_lr, d_lr
             
 def get_num_metric_samples(num_metric_samples, batch_size, global_size):
-    """Returns the number of samples to be trained on before metrics are recalculated"""
+    """Returns the number of samples the metrics will be computed on"""
     if not num_metric_samples:
         if batch_size > 1:
             num_metric_samples = batch_size * global_size
