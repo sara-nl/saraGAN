@@ -5,6 +5,7 @@ import horovod.tensorflow as hvd
 import time
 import random
 import logging
+import copy
 
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
@@ -26,10 +27,14 @@ def optuna_objective(trial, args, config):
     # Store the last fid so that it can be returned to optuna
     last_fid = None
 
+    # Preserve original arguments by creating a deepcopy of args, and call optuna_override_undefined on that.
+    # Otherwise, when running multiple trials, the second trial will always get the arguments from the first trial, rather than calling new suggest_*'s
+    args_copy = copy.deepcopy(args)
+
     # Override args.* that are undefined by optuna's suggest_* calls.
     # For now, this is limited to overriding learning rate, batch size, and learning rate schedules, but may be expanded in the future (see optuna_suggestions.py)
     # Note: this means that when restoring from an optuna FrozenTrial, command line parameters take precedence!
-    args = optuna_override_undefined(args, trial)
+    args = optuna_override_undefined(args_copy, trial)
 
     # Importing modules by name for the generator and discriminator
     discriminator = importlib.import_module(f'networks.{args.architecture}.discriminator').discriminator
