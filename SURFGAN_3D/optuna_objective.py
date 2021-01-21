@@ -27,6 +27,12 @@ import summary
 
 def optuna_objective(trial, args, config):
 
+    # We support several types of runs (see main.py)
+    run_from_best_trial = (args.optuna_use_best_trial and (args.optuna_storage is not None))
+    hyperparam_opt_inter_trial = args.optuna_distributed and not run_from_best_trial
+    hyperparam_opt_intra_trial = (args.optuna_storage is not None) and (args.optuna_study_name is not None) and not hyperparam_opt_inter_trial
+    normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and (not hyperparam_opt_intra_trial)
+
     # Store the last fid so that it can be returned to optuna
     last_fid = None
 
@@ -39,8 +45,8 @@ def optuna_objective(trial, args, config):
     # Note: this means that when restoring from an optuna FrozenTrial, command line parameters take precedence!
     args = optuna_override_undefined(args_copy, trial)
 
-    # Broadcast trial and args objects, in case
-    if args.horovod and hvd.rank() == 0:
+    # If tuning hyperparameters with intra-trial parallelism, send the trial and args object so that the other workers can call optuna_objective with those as arguments
+    if hyperparam_opt_intra_trial and hvd.rank() == 0:
 
         MPI.COMM_WORLD.bcast(trial, root = 0)
         print(f'Worker {hvd.rank()} sending args: {args}')
@@ -299,10 +305,12 @@ def optuna_objective(trial, args, config):
             local_step = 0
             # take_first_snapshot = True
 
-            if args.optuna_distributed:
-                print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}")
-            else:
-                print(f"Trial: {trial.number}, Parameters: {trial.params}")
+            if trial is not None:
+                # Only for inter-trial parallelism: each worker has its own trial, so should report its own parameters. Otherwise, only rank 0 should report
+                if hyperparam_opt_inter_trial:
+                    print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}")
+                elif hvd.rank() == 0:
+                    print(f"Trial: {trial.number}, Parameters: {trial.params}")
 
             # ------------------------------------------------------------------------------------------#
             # Training loop for mixing phase
@@ -396,13 +404,29 @@ def optuna_objective(trial, args, config):
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
-                        if args.optuna_distributed:
-                            print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
-                        else:
-                            print(f"Trial: {trial.number}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
-                        trial.report(metrics['FID'], global_step)
-                        if trial.should_prune():
-                            raise optuna.TrialPruned()
+                        if trial is not None:
+                            # Only for inter-trial parallelism: each worker has its own trial, so should report its own parameters. Otherwise, only rank 0 should report
+                            if hyperparam_opt_inter_trial:
+                                print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
+                            elif hvd.rank() == 0:
+                                print(f"Trial: {trial.number}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
+                        
+                        # If we use intra-trial parallelism, only worker 0 should report and prune, the others should 'just' return. For inter-trial parallelism, each workers should report an prune.
+                        if hyperparam_opt_inter_trial or (hyperparam_opt_intra_trial and (hvd.rank() == 0)):
+                            trial.report(metrics['FID'], global_step)
+                            should_prune = trial.should_prune()
+                            if (args.horovod and (hvd.rank() == 0)):
+                                print("Sending signal to other horovod workers that trial has been pruned and they should return")
+                                MPI.COMM_WORLD.bcast(should_prune, root = 0)
+                            if should_prune:
+                                raise optuna.TrialPruned()
+                        elif hyperparam_opt_intra_trial and (hvd.rank() != 0):
+                            should_prune = False
+                            should_prune = MPI.COMM_WORLD.bcast(should_prune, root = 0)
+                            if should_prune:
+                                print(f"Received signal from rank 0 that trial {trial.number} should be pruned. Returning...")
+                                return last_fid
+
 
                 if verbose:
                     if large_summary_bool:
@@ -417,7 +441,7 @@ def optuna_objective(trial, args, config):
                     elif speed_measurement_bool:
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
-                    if args.optuna_use_best_trial is not None or args.optuna_ntrials == 1:
+                    if args.optuna_use_best_trial or args.optuna_ntrials == 1 or hyperparam_opt_intra_trial:
                         print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha)
 
                 # Is only executed once per phase, because the mixing_bool is then flipped to False
@@ -445,6 +469,7 @@ def optuna_objective(trial, args, config):
                 print("Writing final checkpoint file: model_{phase}")
                 saver.save(sess, os.path.join(logdir, f'model_{phase}'))
 
+            if hyperparam_opt_inter_trial or (hvd.rank() == 0):
                 # Final metric computation is not parallelized, because we want it to be computed on all samples from the test set, without duplicates.
                 # Since the sampling is random for each worker, doing this with all workers could result in some samples being seen by multiple times, with others not being seen at all.
                 # Set horovod to False explicitely, otherwise rank 0 will wait forever for a response from the other ranks.
@@ -464,7 +489,7 @@ def optuna_objective(trial, args, config):
                     print("Validation dataset metrics:")
                     print(metrics_val)
                     # Overwrite the last fid
-                    last_fid = metrics['FID']
+                    last_fid = metrics_val['FID']
                 if args.compute_metrics_train:
                     start_metrics_train = time.time()
                     metrics_train = save_metrics(None, sess, npy_data_train, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), False, get_compute_metrics_dict(args), len(npy_data_train), args.data_mean, args.data_stddev, verbose)
@@ -472,6 +497,13 @@ def optuna_objective(trial, args, config):
                     print(f"Computing metrics on training set took {end_metrics_train - start_metrics_train} seconds")
                     print("Training dataset metrics:")
                     print(metrics_train)
+                    
+                if trial is not None:
+                    # Only for inter-trial parallelism: each worker has its own trial, so should report its own parameters. Otherwise, only rank 0 should report
+                    if hyperparam_opt_inter_trial:
+                        print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
+                    elif hvd.rank() == 0:
+                        print(f"Trial: {trial.number}, Parameters: {trial.params}, global_step: {global_step}, FID: {last_fid}")
 
 
             if args.ending_phase:

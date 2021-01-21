@@ -7,7 +7,7 @@ import time
 import random
 import optuna
 
-from utils import get_verbosity
+from utils import get_verbosity, print_study_summary
 from mpi4py import MPI
 import os
 import psutil
@@ -24,15 +24,31 @@ def main(args, config):
 
     verbose = get_verbosity(args.horovod, args.optuna_distributed)
 
-    timestamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
-    study_name = f"optuna_{timestamp}"
+    # See how much output we can get...
+    optuna.logging.set_verbosity(optuna.logging.DEBUG)
 
-    storage_sqlite=f'sqlite:///optuna_{timestamp}.db'
-    if args.logdir is not None:
-        storage_sqlite=f'sqlite:///{args.logdir}/optuna.db'
-    
-    # Do we want to run optuna trials? Or run a convergence training based on a previous trial result?
-    if args.optuna_use_best_trial and (args.optuna_storage is not None):
+    # Raised errors that should be caught, but trials should just continue (errors are e.g. thrown when OOM)
+    catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError)
+
+    # We support several types of runs:
+    # Load hyperparameters from the best trial in an optuna database, do a (potentially data-parallel) convergence run
+    run_from_best_trial = (args.optuna_use_best_trial and (args.optuna_storage is not None))
+    # Optimize hyperparameters. If multiple MPI workers are launched, each worker runs a single Optuna Trial
+    hyperparam_opt_inter_trial = args.optuna_distributed and not run_from_best_trial
+    # Optimize hyperparameters. If multiple MPI workers are launched, workers work together on a single trial. You can start such runs multiple times to also parallelize over multiple trials.
+    hyperparam_opt_intra_trial = (args.optuna_storage is not None) and (args.optuna_study_name is not None) and not hyperparam_opt_inter_trial
+    # Normal run, no hyperparameter tuning. Do a (potentially data-parallel) convergence run
+    normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and (not hyperparam_opt_intra_trial)
+
+    if normal_run:
+        if verbose:
+            print("Performing single training run (no hyperparameter tuning)")
+        optuna_objective(None, args, config)
+
+    elif run_from_best_trial:
+        if verbose:
+            print("Performing single training run using hyperparameters previously optimized by Optuna")
+
         if args.optuna_study_name is None:
             study_name = optuna.study.get_all_study_summaries(args.optuna_storage)[0].study_name
         else:
@@ -49,43 +65,54 @@ def main(args, config):
             print("Running a single training with the following fixed trial parameters:")
             print(study.best_trial)
         optuna_objective(study.best_trial, args, config)
-    
-    # Else, run the optimization trials
-    else:
-        # If you want to run optuna in distributed fashion, through an mpirun...
-        if args.optuna_distributed:
-            if args.horovod:
-                print("You can either distribute optuna trials over MPI workers, or run a single trial in dataparallel fashion. To do both, please pre-create an optuna database and launch multiple runs to parallelize trials, while using MPI to parallize WITHIN a trial.")
-                raise NotImplementedError()
-            # Only worker with rank 0 should create a study:
-            study = None
-            if hvd.rank() == 0:
-                print("Storing SQlite database for optuna at %s" %storage_sqlite)
-                study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite)
-        
-            # Call a barrier to make sure the study has been created before the other workers load it
-            MPI.COMM_WORLD.Barrier()
 
-            # Then, make all other workers load the study
-            if hvd.rank() != 0:
-                study = optuna.load_study(study_name = study_name, storage = storage_sqlite)
+    elif hyperparam_opt_inter_trial:
+        if verbose:
+            print("Performing hyperparameter optimization run with Optuna. If MPI is used, each rank runs a single trial.")
 
-            ntrials = np.ceil(args.optuna_ntrials/hvd.size())
-        # If you want to run in a distributed fashion using a previously created study (described at https://optuna.readthedocs.io/en/stable/tutorial/10_key_features/004_distributed.html?highlight=distributed#create-a-study)
-        elif (args.optuna_storage is not None) and (args.optuna_study_name is not None):
-            study = optuna.load_study(study_name = args.optuna_study_name, storage = args.optuna_storage)
-            ntrials = args.optuna_ntrials
+        if args.horovod:
+            print("You can either distribute optuna trials over MPI workers, or run a single trial in dataparallel fashion. To do both, please pre-create an optuna database and launch multiple runs to parallelize trials, while using MPI to parallize WITHIN a trial.")
+            raise NotImplementedError()
+
+        # Automatically generate a study name and storage, if they were not passed on command line
+        timestamp = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
+        if args.optuna_study_name is None:
+            study_name = f"optuna_{timestamp}"
         else:
-            # No horovod, so don't use SQlite, but just the default storage
-            study = optuna.create_study(direction = "minimize", study_name = study_name)
-            ntrials = args.optuna_ntrials
+            study_name = args.optuna_study_name
+        if args.optuna_storage is None:
+            if args.logdir is not None:
+                storage_sqlite=f'sqlite:///{args.logdir}/optuna.db'
+            else:
+                storage_sqlite = f'sqlite:///optuna_{timestamp}.db'
+        else:
+            storage_sqlite = args.optuna_storage
 
-        # See how much output we can get...
-        optuna.logging.set_verbosity(optuna.logging.DEBUG)
+        # Only worker with rank 0 should create a study:
+        study = None
+        if hvd.rank() == 0:
+            print("Storing SQlite database for optuna at %s" %storage_sqlite)
+            study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite)
+    
+        # Call a barrier to make sure the study has been created before the other workers load it
+        MPI.COMM_WORLD.Barrier()
 
-        # Raised errors that should be caught, but trials should just continue (errors are e.g. thrown when OOM)
-        catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError)
+        # Then, make all other workers load the study
+        if hvd.rank() != 0:
+            study = optuna.load_study(study_name = study_name, storage = storage_sqlite)
 
+        ntrials = np.ceil(args.optuna_ntrials/hvd.size())
+
+        study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials)
+
+        print_study_summary(study)
+
+    elif hyperparam_opt_intra_trial:
+        if verbose:
+            print("Performing hyperparameter optimization run with Optuna. If MPI is used, it is used to perform data-parallel training")
+
+        study = optuna.load_study(study_name = args.optuna_study_name, storage = args.optuna_storage)
+        ntrials = args.optuna_ntrials
         # If using horovod for intra-trial parallelization (data-parallel), only the first worker calls study.optimize. The others call optuna_objective directly.
         if args.horovod and (hvd.rank() != 0):
             # Execute same number of trials 
@@ -100,14 +127,7 @@ def main(args, config):
         else:
             study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials)
 
-
-        print("Number of finished trials: ", len(study.trials))
-        print("Best trial:")
-        trial = study.best_trial
-        print(" Value: ", trial.value)
-        print(" Params: ")
-        for key, value in trial.params.items():
-            print("    {}: {}".format(key, value))
+        print_study_summary(study)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
