@@ -9,6 +9,21 @@ import time
 
 from dataset import NumpyPathDataset
 
+def print_study_summary(study):
+    """Prints a summary of the Optuna study.
+    Parameters:
+        study: an optuna study
+    Returns:
+        None
+    """
+    print("Number of finished trials: ", len(study.trials))
+    print("Best trial:")
+    trial = study.best_trial
+    print(" Value: ", trial.value)
+    print(" Params: ")
+    for key, value in trial.params.items():
+        print("    {}: {}".format(key, value))
+        
 def dump_weight_for_debugging(sess):
     """Dumps the first weight from the dense layer. Can be used for debugging, e.g. to see how it develops, or if it gets loaded correctly from a checkpoint.
     Parameters:
