@@ -57,9 +57,9 @@ def optuna_override_undefined(args, trial):
         if verbose:
             print(f"args.g_lr_increase = {args.g_lr_increase} (from: optuna trial)")
             print(f"args.g_lr_rise_niter = {args.g_lr_rise_niter} (from: optuna trial)")
-    elif (args.g_lr_increase is not None and args.g_lr_rise_niter is None) or (args.g_lr_rise_niter is not None and args.g_lr_increase is None):
+    elif (args.g_lr_increase is not None and args.g_lr_rise_niter is None):
         if verbose:
-            print("ERROR: either both g_lr_increase and g_lr_rise_niter have to be specified, or neither. You cannot specify only one.")
+            print("ERROR: if you specify g_lr_increase on the command line, g_lr_rise_niter also has to be specified.")
         raise NotImplementedError()
     elif verbose:
         print(f"args.g_lr_increase = {args.g_lr_increase} (from: command line argument)")
@@ -72,9 +72,9 @@ def optuna_override_undefined(args, trial):
         if verbose:
             print(f"args.g_lr_decrease = {args.g_lr_decrease} (from: optuna trial)")
             print(f"args.g_lr_decay_niter = {args.g_lr_decay_niter} (from: optuna trial)")
-    elif (args.g_lr_decrease is not None and args.g_lr_decay_niter is None) or (args.g_lr_decay_niter is not None and args.g_lr_decrease is None):
+    elif (args.g_lr_decrease is not None and args.g_lr_decay_niter is None):
         if verbose:
-            print("ERROR: either both g_lr_decrease and g_lr_decay_niter have to be specified, or neither. You cannot specify only one.")
+            print("ERROR: if you specify g_lr_decrease on the command line, g_lr_decay_niter also has to be specified.")
         raise NotImplementedError()
     elif verbose:
         print(f"args.g_lr_decrease = {args.g_lr_decrease} (from: command line argument)")
@@ -87,9 +87,9 @@ def optuna_override_undefined(args, trial):
         if verbose:
             print(f"args.d_lr_increase = {args.d_lr_increase} (from: optuna trial)")
             print(f"args.d_lr_rise_niter = {args.d_lr_rise_niter} (from: optuna trial)")
-    elif (args.d_lr_increase is not None and args.d_lr_rise_niter is None) or (args.d_lr_rise_niter is not None and args.d_lr_increase is None):
+    elif (args.d_lr_increase is not None and args.d_lr_rise_niter is None):
         if verbose:
-            print("ERROR: either both d_lr_increase and d_lr_rise_niter have to be specified, or neither. You cannot specify only one.")
+            print("ERROR: if you specify d_lr_increase on the command line, d_lr_rise_niter also has to be specified.")
         raise NotImplementedError()
     elif verbose:
         print(f"args.d_lr_increase = {args.d_lr_increase} (from: command line argument)")
@@ -102,9 +102,9 @@ def optuna_override_undefined(args, trial):
         if verbose:
             print(f"args.d_lr_decrease = {args.d_lr_decrease} (from: optuna trial)")
             print(f"args.d_lr_decay_niter = {args.d_lr_decay_niter} (from: optuna trial)")
-    elif (args.d_lr_decrease is not None and args.d_lr_decay_niter is None) or (args.d_lr_decay_niter is not None and args.d_lr_decrease is None):
+    elif (args.d_lr_decrease is not None and args.d_lr_decay_niter is None):
         if verbose:
-            print("ERROR: either both d_lr_decrease and d_lr_decay_niter have to be specified, or neither. You cannot specify only one.")
+            print("ERROR: if you specify d_lr_decrease on the command line, d_lr_decay_niter also has to be specified.")
         raise NotImplementedError()
     elif verbose:
         print(f"args.d_lr_decrease = {args.d_lr_decrease} (from: command line argument)")

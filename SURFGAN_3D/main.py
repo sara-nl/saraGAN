@@ -32,13 +32,17 @@ def main(args, config):
         storage_sqlite=f'sqlite:///{args.logdir}/optuna.db'
     
     # Do we want to run optuna trials? Or run a convergence training based on a previous trial result?
-    if args.optuna_use_best_trial:
-        study_name = optuna.study.get_all_study_summaries(args.optuna_use_best_trial)[0].study_name
+    if args.optuna_use_best_trial and (args.optuna_storage is not None):
+        if args.optuna_study_name is None:
+            study_name = optuna.study.get_all_study_summaries(args.optuna_storage)[0].study_name
+        else:
+            study_name = args.optuna_study_name
+
         if verbose:
             print("Restoring best trial:")
             print(f"    Study name: {study_name}")
-            print(f"    Database: {args.optuna_use_best_trial}")
-        study = optuna.load_study(study_name = study_name, storage = args.optuna_use_best_trial)
+            print(f"    Database: {args.optuna_storage}")
+        study = optuna.load_study(study_name = study_name, storage = args.optuna_storage)
 
         # Start a full training with the best_trial parameters that were obtained previously:
         if verbose:
@@ -50,6 +54,9 @@ def main(args, config):
     else:
         # If you want to run optuna in distributed fashion, through an mpirun...
         if args.optuna_distributed:
+            if args.horovod:
+                print("You can either distribute optuna trials over MPI workers, or run a single trial in dataparallel fashion. To do both, please pre-create an optuna database and launch multiple runs to parallelize trials, while using MPI to parallize WITHIN a trial.")
+                raise NotImplementedError()
             # Only worker with rank 0 should create a study:
             study = None
             if hvd.rank() == 0:
@@ -64,6 +71,10 @@ def main(args, config):
                 study = optuna.load_study(study_name = study_name, storage = storage_sqlite)
 
             ntrials = np.ceil(args.optuna_ntrials/hvd.size())
+        # If you want to run in a distributed fashion using a previously created study (described at https://optuna.readthedocs.io/en/stable/tutorial/10_key_features/004_distributed.html?highlight=distributed#create-a-study)
+        elif (args.optuna_storage is not None) and (args.optuna_study_name is not None):
+            study = optuna.load_study(study_name = args.optuna_study_name, storage = args.optuna_storage)
+            ntrials = args.optuna_ntrials
         else:
             # No horovod, so don't use SQlite, but just the default storage
             study = optuna.create_study(direction = "minimize", study_name = study_name)
@@ -75,7 +86,20 @@ def main(args, config):
         # Raised errors that should be caught, but trials should just continue (errors are e.g. thrown when OOM)
         catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError)
 
-        study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials)
+        # If using horovod for intra-trial parallelization (data-parallel), only the first worker calls study.optimize. The others call optuna_objective directly.
+        if args.horovod and (hvd.rank() != 0):
+            # Execute same number of trials 
+            for i in range(ntrials):
+                # Get trial and args
+                trial = None
+                args = None
+                trial = MPI.COMM_WORLD.bcast(trial, root = 0)
+                args = MPI.COMM_WORLD.bcast(args, root = 0)
+                print(f'Worker: {hvd.rank()} received trial {trial} and arguments {args}')
+                optuna_objective(trial, args, config)
+        else:
+            study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials)
+
 
         print("Number of finished trials: ", len(study.trials))
         print("Best trial:")
@@ -154,8 +178,8 @@ if __name__ == '__main__':
     # Metrics
     parser.add_argument('--calc_metrics', default=False, action='store_true')
     parser.add_argument('--compute_metrics_train', default=False, action='store_true', help="If defined, all metrics will be computed on the full training data set at the end of a resolution step / 'phase' (not recommended, very time consuming).")
-    parser.add_argument('--compute_metrics_validation', default=True, action='store_true', help="If defined, all metrics will be computed on the full validation data set at the end of a resolution step / 'phase' (recommended, but time consuming).")
-    parser.add_argument('--compute_metrics_test', default=True, action='store_true', help="If defined, all metrics will be computed on the full test data set at the end of a resolution step / 'phase' (recommended, but time consuming).")
+    parser.add_argument('--disable_compute_metrics_validation', dest = 'compute_metrics_validation', default=True, action='store_false', help="If defined, all metrics will be computed on the full validation data set at the end of a resolution step / 'phase' (recommended, but time consuming).")
+    parser.add_argument('--disable_compute_metrics_test', dest = 'compute_metrics_test', default=True, action='store_false', help="If defined, all metrics will be computed on the full test data set at the end of a resolution step / 'phase' (recommended, but time consuming).")
     parser.add_argument('--summary_small_every_nsteps', default=32, type=int, help="Summaries are saved every time the locally processsed image counter is a multiple of this number")
     parser.add_argument('--summary_large_every_nsteps', default=64, type=int, help="Large summaries such as images are saved every time the locally processed image counter is a multiple of this number")
     parser.add_argument('--num_metric_samples', type=int, default=None, help="Number of samples used to compute the metrics are computed. A higher number of samples will be more accurate (show less variation in metrics between iterations), but take more time to compute.")
@@ -171,7 +195,9 @@ if __name__ == '__main__':
     # Optuna
     parser.add_argument('--optuna_distributed', default=False, action='store_true', help="Pass this argument if you want to run optuna in distributed fashion. Run should be started as an mpi program (i.e. launching with mpirun or srun). Each MPI rank will work on its own Optuna trial. Do NOT combine with --horovod: parallelization happens at the trial level, it should NOT also be done within trials.")
     parser.add_argument('--optuna_ntrials', default=100, type=int, help="Sets the number of Optuna Trials to do")
-    parser.add_argument('--optuna_use_best_trial', default=None, type=str, help="SQlite Optuna database file. This will run the training with the parameters from the best_trial in the first study in that database.")
+    parser.add_argument('--optuna_use_best_trial', default=False, action='store_true', help="Use the best trial from the database passed as optuna_storage")
+    parser.add_argument('--optuna_storage', default=None, type=str, help="An Optuna DB file")
+    parser.add_argument('--optuna_study_name', default=None, type=str, help="Name of the optuna study in the Optuna DB file")
 
     # Input data normalization
     parser.add_argument('--data_mean', default=None, type=float, required=False, help="Mean of the input data. Used for input normalization. E.g. in the case of CT scans, this would be the mean CT value over all scans. Note: normalization is only performed if both data_mean and data_stddev are defined.")
