@@ -357,10 +357,10 @@ def optuna_objective(trial, args, config):
                 #sess = tf_debug.TensorBoardDebugWrapperSession(sess, 'localhost:6789')
                 
                 # Measure speed as often as small_summaries, but one iteration later. This avoids timing the summaries themselves.
-                speed_measurement_bool = ((local_step - 1) % args.summary_small_every_nsteps == 0)
-                small_summary_bool = (local_step % args.summary_small_every_nsteps == 0)
-                large_summary_bool = (local_step % args.summary_large_every_nsteps == 0)
-                metrics_summary_bool = (local_step % args.metrics_every_nsteps == 0)
+                speed_measurement_bool = ((local_step - 1) % args.summary_small_every_nsteps < batch_size)
+                small_summary_bool = (local_step % args.summary_small_every_nsteps < batch_size)
+                large_summary_bool = (local_step % args.summary_large_every_nsteps < batch_size)
+                metrics_summary_bool = (local_step % args.metrics_every_nsteps < batch_size)
 
                 # Run training step, including summaries
                 if large_summary_bool:
@@ -384,7 +384,7 @@ def optuna_objective(trial, args, config):
 
                 #print("Completed step")
                 global_step += batch_size * global_size
-                local_step += 1
+                local_step += batch_size
 
                 end = time.time()
                 local_img_s = batch_size / (end - start)
@@ -430,12 +430,14 @@ def optuna_objective(trial, args, config):
 
                 if verbose:
                     if large_summary_bool:
-                        print('Writing large summary...')
+                        if not hyperparam_opt_inter_trial:
+                            print('Writing large summary...')
                         writer.add_summary(summary_s, global_step)
                         writer.add_summary(summary_s_val, global_step)
                         writer.add_summary(summary_l, global_step)
                     elif small_summary_bool:
-                        print('Writing small summary...')
+                        if not hyperparam_opt_inter_trial:
+                            print('Writing small summary...')
                         writer.add_summary(summary_s, global_step)
                         writer.add_summary(summary_s_val, global_step)
                     elif speed_measurement_bool:
