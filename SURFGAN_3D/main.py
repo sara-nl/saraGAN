@@ -40,6 +40,19 @@ def main(args, config):
     # Normal run, no hyperparameter tuning. Do a (potentially data-parallel) convergence run
     normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and (not hyperparam_opt_intra_trial)
 
+    # Select the correct pruner based on args:
+    if args.optuna_pruner == 'median':
+        if verbose:
+            print("Creating study with MedianPruner()")
+        current_pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=20000)
+    elif args.optuna_pruner == 'nopruner':
+        if verbose:
+            print("Creating study with NopPruner()")
+        current_pruner = optuna.pruners.NopPruner()
+    else:
+        print("No valid pruner specified")
+        raise NotImplementedError
+
     if normal_run:
         if verbose:
             print("Performing single training run (no hyperparameter tuning)")
@@ -58,7 +71,8 @@ def main(args, config):
             print("Restoring best trial:")
             print(f"    Study name: {study_name}")
             print(f"    Database: {args.optuna_storage}")
-        study = optuna.load_study(study_name = study_name, storage = args.optuna_storage)
+        # When continuing from a best trial, pruning should never be done. Thus, hard-coded NopPruner()
+        study = optuna.load_study(study_name = study_name, storage = args.optuna_storage, pruner = optuna.pruners.NopPruner())
 
         # Start a full training with the best_trial parameters that were obtained previously:
         if verbose:
@@ -92,18 +106,29 @@ def main(args, config):
         study = None
         if hvd.rank() == 0:
             print("Storing SQlite database for optuna at %s" %storage_sqlite)
-            study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite)
+
+            study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite, load_if_exists = True,
+                pruner=current_pruner
+            )
     
         # Call a barrier to make sure the study has been created before the other workers load it
         MPI.COMM_WORLD.Barrier()
 
+        # Make sure not all studies start loading at the same time... stagger by 1s per rank
+        time.sleep(hvd.rank())
+
         # Then, make all other workers load the study
         if hvd.rank() != 0:
-            study = optuna.load_study(study_name = study_name, storage = storage_sqlite)
+            study = optuna.load_study(study_name = study_name, storage = storage_sqlite, pruner = current_pruner)
+        
+        if args.optuna_ntrials is not None:
+            ntrials = np.ceil(args.optuna_ntrials/hvd.size())
 
-        ntrials = np.ceil(args.optuna_ntrials/hvd.size())
-
-        study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials)
+        if args.optuna_ntrials is not None:
+            study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials, gc_after_trial = True)
+        else:
+            study.optimize(lambda trial: optuna_objective(trial, args, config), catch = catchErrorsInTrials, gc_after_trial = True)
+        
 
         print_study_summary(study)
 
@@ -111,21 +136,38 @@ def main(args, config):
         if verbose:
             print("Performing hyperparameter optimization run with Optuna. If MPI is used, it is used to perform data-parallel training")
 
-        study = optuna.load_study(study_name = args.optuna_study_name, storage = args.optuna_storage)
-        ntrials = args.optuna_ntrials
+        # Make sure not all studies start loading at the same time... stagger by 1s per rank
+        time.sleep(hvd.rank())
+        
+        study = optuna.load_study(study_name = args.optuna_study_name, storage = args.optuna_storage, pruner = current_pruner)
+
+        if args.optuna_ntrials is not None:
+            ntrials = args.optuna_ntrials
+
         # If using horovod for intra-trial parallelization (data-parallel), only the first worker calls study.optimize. The others call optuna_objective directly.
-        if args.horovod and (hvd.rank() != 0):
-            # Execute same number of trials 
-            for i in range(ntrials):
-                # Get trial and args
-                trial = None
-                args = None
-                trial = MPI.COMM_WORLD.bcast(trial, root = 0)
-                args = MPI.COMM_WORLD.bcast(args, root = 0)
-                print(f'Worker: {hvd.rank()} received trial {trial} and arguments {args}')
-                optuna_objective(trial, args, config)
+        def loopbody(config):
+            # Get trial and args
+            trial = None
+            args = None
+            trial = MPI.COMM_WORLD.bcast(trial, root = 0)
+            args = MPI.COMM_WORLD.bcast(args, root = 0)
+            print(f'Worker: {hvd.rank()} received trial {trial} and arguments {args}')
+            optuna_objective(trial, args, config)
+
+        if args.optuna_ntrials is not None:
+            # Run fixed number of trials
+            if args.horovod and (hvd.rank() != 0):
+                for i in range(ntrials):
+                    loopbody(config)
+            else:
+                study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials, gc_after_trial = True)
         else:
-            study.optimize(lambda trial: optuna_objective(trial, args, config), n_trials = ntrials, catch = catchErrorsInTrials)
+            # Keep running trials until walltime is hit:
+            if args.horovod and (hvd.rank() !=0):
+                while True:
+                    loopbody(config)
+            else:
+                study.optimize(lambda trial: optuna_objective(trial, args, config), catch = catchErrorsInTrials, gc_after_trial = True)
 
         print_study_summary(study)
 
@@ -214,10 +256,11 @@ if __name__ == '__main__':
 
     # Optuna
     parser.add_argument('--optuna_distributed', default=False, action='store_true', help="Pass this argument if you want to run optuna in distributed fashion. Run should be started as an mpi program (i.e. launching with mpirun or srun). Each MPI rank will work on its own Optuna trial. Do NOT combine with --horovod: parallelization happens at the trial level, it should NOT also be done within trials.")
-    parser.add_argument('--optuna_ntrials', default=100, type=int, help="Sets the number of Optuna Trials to do")
+    parser.add_argument('--optuna_ntrials', default=None, type=int, help="Sets the number of Optuna Trials to do. A setting of 'None' will result in Optuna running trials until the job runs out of walltime. This is often sensible: with a specified number of trials, each MPI worker gets its own portion. Some MPI workers will finish their portion early, and will idle - wasting a lot of resources.")
     parser.add_argument('--optuna_use_best_trial', default=False, action='store_true', help="Use the best trial from the database passed as optuna_storage")
     parser.add_argument('--optuna_storage', default=None, type=str, help="An Optuna DB file")
     parser.add_argument('--optuna_study_name', default=None, type=str, help="Name of the optuna study in the Optuna DB file")
+    parser.add_argument('--optuna_pruner', default='median', choices=['median', 'nopruner'], help="Select which pruner is used by Optuna")
 
     # Input data normalization
     parser.add_argument('--data_mean', default=None, type=float, required=False, help="Mean of the input data. Used for input normalization. E.g. in the case of CT scans, this would be the mean CT value over all scans. Note: normalization is only performed if both data_mean and data_stddev are defined.")
