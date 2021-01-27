@@ -36,14 +36,14 @@ def optuna_override_undefined(args, trial):
         print(f"args.base_batch_size = {args.base_batch_size} (from: command line argument)")
 
     if not args.g_lr:
-        args.g_lr = trial.suggest_loguniform('generator_LR', 1e-6, 1e-2)
+        args.g_lr = trial.suggest_loguniform('generator_LR', 1e-4, 1e-1)
         if verbose:
             print(f"args.g_lr = {args.g_lr} (from: optuna trial)")
     elif verbose:
         print(f"args.g_lr = {args.g_lr} (from: command line argument)")
 
     if not args.d_lr:
-        args.d_lr = trial.suggest_loguniform('discriminator_LR', 1e-6, 1e-2)
+        args.d_lr = trial.suggest_loguniform('discriminator_LR', 1e-4, 1e-1)
         if verbose:
             print(f"args.d_lr = {args.d_lr} (from: optuna trial)")
     elif verbose:
