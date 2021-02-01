@@ -9,7 +9,7 @@ import copy
 
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
-from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables, print_summary_to_stdout
+from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables, print_summary_to_stdout, dump_weight_for_debugging
 import dataset as data
 from optuna_suggestions import optuna_override_undefined
 import os
@@ -17,6 +17,7 @@ import importlib
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
 
 from metrics.save_metrics import save_metrics
+from ExtendedEMA import ExtendedEMA
 
 import networks as nw
 import optimization as opt
@@ -204,11 +205,17 @@ def optuna_objective(trial, args, config):
         # Create an exponential moving average of generator weights. We update this every step.
         gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-        ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
-        ema_op = ema.apply(gen_vars)
-        # After training has completed, we copy the EMA weights to the generator using the following op (before saving the generator model).
+        all_vars = gen_vars + disc_vars
+        ema = ExtendedEMA(var_list = all_vars, decay=args.ema_beta)
+        ema_op = ema.apply()
+        assign_ema_weights = ema.assign_ema_weights()
+        restore_original_weights = ema.restore_original_weights()
+
+        # ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
+        # ema_op = ema.apply(all_vars)
+        # After training has completed, we copy the EMA weights to the generator AND discriminator using the following op (before saving the generator model).
         ema_update_weights = tf.group(
-            [tf.assign(var, ema.average(var)) for var in gen_vars])
+            [tf.assign(var, ema.average(var)) for var in all_vars])
 
         # ------------------------------------------------------------------------------------------#
         # Summaries
@@ -345,6 +352,7 @@ def optuna_objective(trial, args, config):
                 metrics_summary_bool = (local_step % args.metrics_every_nsteps == 0)
 
                 # Run training step, including summaries
+                # TODO: Should we compute the large summary based on the EMA model...? It may show more 'stable' quality images, rather than alternatingly very good or bad samples... And it is representative for the model we will ACTUALLY store in the end
                 if large_summary_bool:
                     _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, summary_small, summary_large,
@@ -357,12 +365,30 @@ def optuna_objective(trial, args, config):
                     _, _, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, disc_loss, gen_loss],
                          feed_dict={real_image_input: batch})
+                # Update EMA right after training step
+                # dump_weight_for_debugging(sess)
+                # var = [v for v in tf.trainable_variables() if v.name == "generator/generator_in/dense/weight:0"]
+                # print(f"DEBUG: weight before ema_op for var {var} is {sess.run(ema.average(var[0]))[0,0]}")
+                sess.run(ema_op)
+                # print(f"DEBUG: weight after ema_op for var {var} is {sess.run(ema.average(var[0]))[0,0]}")
 
                 # Run validation loss
                 if large_summary_bool or small_summary_bool:
                     batch_val = npy_data_validation.batch(batch_size)
                     batch_val = data.normalize_numpy(batch_val, args.data_mean, args.data_stddev, verbose)
+                    # Compute validation loss on training weights (noisy)
                     summary_s_val = sess.run(summary_small_validation, feed_dict={real_image_input: batch_val})
+                    # Compute validation loss on ema weights (less noisy)
+                    # TODO: WILL NOT CURRENTLY WORK! Rerunning summary_small_validation will result in writing different summary values but with the same metric name...
+                    # dump_weight_for_debugging(sess)
+                    # assign_start = time.time()
+                    # sess.run(assign_ema_weights) # Takes only ~ 2 ms
+                    # assign_end = time.time()
+                    # print(f"It takes {assign_start - assign_end} seconds to assign EMA weights")
+                    # dump_weight_for_debugging(sess)
+                    # summary_s_val_ema = sess.run(summary_small_validation, feed_dict={real_image_input: batch_val})
+                    # sess.run(restore_original_weights)
+                    # dump_weight_for_debugging(sess)
 
                 #print("Completed step")
                 global_step += batch_size * global_size
@@ -375,7 +401,6 @@ def optuna_objective(trial, args, config):
                 if mixing_bool:
                     sess.run(update_alpha)
 
-                sess.run(ema_op)
                 in_phase_step = sess.run(update_intra_phase_step)
 
                 if metrics_summary_bool:
@@ -383,6 +408,13 @@ def optuna_objective(trial, args, config):
                         # if verbose:
                             # print('Computing and writing metrics...')
                         metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose)
+                        # Compute and save metrics based on EMA weights
+                        dump_weight_for_debugging(sess)
+                        sess.run(assign_ema_weights)
+                        dump_weight_for_debugging(sess)
+                        metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose, suffix='_EMA')
+                        sess.run(restore_original_weights)
+                        dump_weight_for_debugging(sess)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
@@ -407,7 +439,7 @@ def optuna_objective(trial, args, config):
                     elif speed_measurement_bool:
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
-                    if args.optuna_use_best_trial is not None or args.optuna_ntrials == 1:
+                    if args.optuna_use_best_trial or args.optuna_ntrials == 1 or hyperparam_opt_intra_trial or normal_run:
                         print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha)
 
                 # Is only executed once per phase, because the mixing_bool is then flipped to False

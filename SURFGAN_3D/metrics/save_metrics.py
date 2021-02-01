@@ -16,7 +16,7 @@ def add_to_metric_summary(metric_name, metric_value, summary_metrics, sess):
     sess.run([init_metric, update_metric])
     summary_metrics.append(tf.summary.scalar(metric_name, metric_tensor))
 
-def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, imagesize_xy, horovod, compute_metrics, num_metric_samples, data_mean, data_stddev, verbose):
+def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, global_step, imagesize_xy, horovod, compute_metrics, num_metric_samples, data_mean, data_stddev, verbose, suffix=''):
     """
     Saves metrics to a tf.summary
 
@@ -50,6 +50,8 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
         Standard deviation of the dataset. Used to normalize the data (if provided)
     verbose : bool
         Should verbose output be printed? (Typically only for rank 0 if Horovod is used)
+    suffix : str
+        Optional suffix to be appended to each metric name in the summary
 
     Returns:
     --------
@@ -170,8 +172,8 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
                 fid = fid_local
             metrics['FID'] = fid
             if verbose:
-                # print(f"FID: {fid:.4f}")
-                add_to_metric_summary('fid', fid, summary_metrics, sess)
+                print(f"FID: {fid:.4f}")
+                add_to_metric_summary('fid' + suffix, fid, summary_metrics, sess)
 
         if compute_metrics['compute_psnrs']:
             psnr_local = np.mean(psnrs_local)
@@ -182,7 +184,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
             metrics['psnr'] = psnr
             if verbose:
                 print(f"PSNR: {psnr:.4f}")
-                add_to_metric_summary('PSNR', psnr, summary_metrics, sess)
+                add_to_metric_summary('PSNR' + suffix, psnr, summary_metrics, sess)
 
         if compute_metrics['compute_ssims']:
             ssim_local = np.mean(ssims_local)
@@ -193,7 +195,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
             metrics['ssim'] = ssim
             if verbose:
                 print(f"SSIM: {ssim}")
-                add_to_metric_summary('ssim', ssim, summary_metrics, sess)
+                add_to_metric_summary('ssim' + suffix, ssim, summary_metrics, sess)
 
         if compute_metrics['compute_mses']:
             mse_local = np.mean(mses_local)
@@ -204,7 +206,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
             metrics['mse'] = mse
             if verbose:
                 print(f"MSE: {mse:.4f}")
-                add_to_metric_summary('MSE', mse, summary_metrics, sess)
+                add_to_metric_summary('MSE' + suffix, mse, summary_metrics, sess)
 
         if compute_metrics['compute_nrmses']:
             nrmse_local = np.mean(nrmses_local)
@@ -215,7 +217,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
             metrics['nrmse'] = nrmse
             if verbose:
                 print(f"Normalized Root MSE: {nrmse:.4f}")
-                add_to_metric_summary('NRMSE', nrmse, summary_metrics, sess)
+                add_to_metric_summary('NRMSE' + suffix, nrmse, summary_metrics, sess)
 
         if compute_metrics['compute_swds']:
             swds_local = np.array(swds_local)
@@ -230,15 +232,15 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
                 print(f"SWDS: {swds}")
                 for i in range(len(swds))[:-1]:
                     lod = 16 * 2 ** i
-                    add_to_metric_summary(f'swd_{lod}', swds[i], summary_metrics, sess)
-                add_to_metric_summary(f'swd_mean', swds[-1], summary_metrics, sess)
+                    add_to_metric_summary(f'swd_{lod}' + suffix, swds[i], summary_metrics, sess)
+                add_to_metric_summary(f'swd_mean' + suffix, swds[-1], summary_metrics, sess)
 
         # Finally, write the full summary
         if len(summary_metrics) > 0 and writer is not None:
             try:
-                summary_metrics = tf.get_default_graph().get_tensor_by_name("metrics/summary_metrics/summary_metrics:0")
+                summary_metrics = tf.get_default_graph().get_tensor_by_name("metrics/summary_metrics{}/summary_metrics{}:0".format(suffix, suffix))
             except:
-                summary_metrics = tf.summary.merge(summary_metrics, name = "summary_metrics")
+                summary_metrics = tf.summary.merge(summary_metrics, name = "summary_metrics{}".format(suffix))
 
             summary_met = sess.run(summary_metrics)
             writer.add_summary(summary_met, global_step)
