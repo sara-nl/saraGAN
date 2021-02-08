@@ -159,7 +159,7 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
         if counter >= num_metric_samples:
             break
 
-    with tf.variable_scope('metrics', reuse=tf.AUTO_REUSE):
+    with tf.variable_scope('metrics/', reuse=tf.AUTO_REUSE):
 
         # Collect metrics in a single tf.summary
         summary_metrics = []
