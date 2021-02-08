@@ -36,15 +36,15 @@ def main(args, config):
     # Optimize hyperparameters. If multiple MPI workers are launched, each worker runs a single Optuna Trial
     hyperparam_opt_inter_trial = args.optuna_distributed and not run_from_best_trial
     # Optimize hyperparameters. If multiple MPI workers are launched, workers work together on a single trial. You can start such runs multiple times to also parallelize over multiple trials.
-    hyperparam_opt_intra_trial = (args.optuna_storage is not None) and (args.optuna_study_name is not None) and not hyperparam_opt_inter_trial
+    hyperparam_opt_intra_trial = (args.optuna_storage is not None) and (args.optuna_study_name is not None) and not (run_from_best_trial or hyperparam_opt_inter_trial)
     # Normal run, no hyperparameter tuning. Do a (potentially data-parallel) convergence run
-    normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and (not hyperparam_opt_intra_trial)
+    normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and not (run_from_best_trial or hyperparam_opt_inter_trial or hyperparam_opt_intra_trial)
 
     # Select the correct pruner based on args:
     if args.optuna_pruner == 'median':
         if verbose:
             print("Creating study with MedianPruner()")
-        current_pruner = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=20000)
+        current_pruner = optuna.pruners.MedianPruner(n_startup_trials=10)
     elif args.optuna_pruner == 'nopruner':
         if verbose:
             print("Creating study with NopPruner()")
@@ -261,6 +261,7 @@ if __name__ == '__main__':
     parser.add_argument('--optuna_storage', default=None, type=str, help="An Optuna DB file")
     parser.add_argument('--optuna_study_name', default=None, type=str, help="Name of the optuna study in the Optuna DB file")
     parser.add_argument('--optuna_pruner', default='median', choices=['median', 'nopruner'], help="Select which pruner is used by Optuna")
+    parser.add_argument('--optuna_warmup_steps', default=20000, type=int, help="Pruning is only considered after this amount of images has been trained on (globally, in case of data-parallel training). This warmup period is applied in each resolution phase. I.e. if optuna_warmup_steps=20000, for the first 20000 images in each resolution phase, no trial will be pruned.")
 
     # Input data normalization
     parser.add_argument('--data_mean', default=None, type=float, required=False, help="Mean of the input data. Used for input normalization. E.g. in the case of CT scans, this would be the mean CT value over all scans. Note: normalization is only performed if both data_mean and data_stddev are defined.")

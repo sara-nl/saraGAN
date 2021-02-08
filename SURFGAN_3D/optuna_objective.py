@@ -20,6 +20,7 @@ import dataset as data
 from optuna_suggestions import optuna_override_undefined
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
 from metrics.save_metrics import save_metrics
+from ExtendedEMA import ExtendedEMA
 
 import networks as nw
 import optimization as opt
@@ -31,8 +32,8 @@ def optuna_objective(trial, args, config):
     # We support several types of runs (see main.py)
     run_from_best_trial = (args.optuna_use_best_trial and (args.optuna_storage is not None))
     hyperparam_opt_inter_trial = args.optuna_distributed and not run_from_best_trial
-    hyperparam_opt_intra_trial = (args.optuna_storage is not None) and (args.optuna_study_name is not None) and not hyperparam_opt_inter_trial
-    normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and (not hyperparam_opt_intra_trial)
+    hyperparam_opt_intra_trial = (args.optuna_storage is not None) and (args.optuna_study_name is not None) and not (run_from_best_trial or hyperparam_opt_inter_trial)
+    normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and not (run_from_best_trial or hyperparam_opt_inter_trial or hyperparam_opt_intra_trial)
 
     # Store the last fid so that it can be returned to optuna
     last_fid = None
@@ -221,43 +222,38 @@ def optuna_objective(trial, args, config):
         # Create an exponential moving average of generator weights. We update this every step.
         gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-        ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
-        ema_op = ema.apply(gen_vars)
-        # After training has completed, we copy the EMA weights to the generator using the following op (before saving the generator model).
+        all_vars = gen_vars + disc_vars
+        ema = ExtendedEMA(var_list = all_vars, decay=args.ema_beta)
+        ema_op = ema.apply()
+        assign_ema_weights = ema.assign_ema_weights()
+        restore_original_weights = ema.restore_original_weights()
+
+        # ema = tf.train.ExponentialMovingAverage(decay=args.ema_beta)
+        # ema_op = ema.apply(all_vars)
+        # After training has completed, we copy the EMA weights to the generator AND discriminator using the following op (before saving the generator model).
         ema_update_weights = tf.group(
-            [tf.assign(var, ema.average(var)) for var in gen_vars])
+            [tf.assign(var, ema.average(var)) for var in all_vars])
 
         # ------------------------------------------------------------------------------------------#
         # Summaries
+        summary_training_props = summary.create_training_props_summary(alpha, g_lr, d_lr)
 
-        summary_small = summary.create_small_summary(
-            disc_loss,
-            gen_loss,
-            gp_loss,
-            g_gradients,
-            g_variables,
-            d_gradients,
-            d_variables,
-            max_g_norm,
-            max_d_norm,
-            gen_sample,
-            real_image_input,
-            alpha,
-            g_lr,
-            d_lr
-        )
-        # This is only computed on the validation dataset
-        summary_small_validation = summary.create_small_validation_summary(
-            disc_loss,
-            gen_loss,
-            gp_loss,
-            gen_sample,
-            real_image_input,
-        )
-        summary_large = summary.create_large_summary(
-            real_image_input,
-            gen_sample
-        )
+        summary_small_with_gradients = summary.create_small_summary_with_gradients(
+            disc_loss, gen_loss, gp_loss, 
+            g_gradients, g_variables, d_gradients, d_variables,
+            max_g_norm, max_d_norm, gen_sample, real_image_input)
+
+        # Summary parameters will get the *_val suffix. Intended to be computed on the validation dataset
+        summary_small_validation = summary.create_small_summary(
+            disc_loss, gen_loss, gp_loss,
+            gen_sample, real_image_input, '_val')
+        # Summary parameters will get the *_EMA suffix. Intended to be computed on using the EMA variables
+        summary_small_EMA = summary.create_small_summary(
+            disc_loss, gen_loss, gp_loss,
+            gen_sample, real_image_input, '_EMA')
+
+        summary_large = summary.create_large_summary(real_image_input, gen_sample)
+        summary_large_EMA = summary.create_large_summary(real_image_input, gen_sample, '_EMA')
 
         # ------------------------------------------------------------------------------------------#
         # Other ops
@@ -358,30 +354,39 @@ def optuna_objective(trial, args, config):
                 #sess = tf_debug.TensorBoardDebugWrapperSession(sess, 'localhost:6789')
                 
                 # Measure speed as often as small_summaries, but one iteration later. This avoids timing the summaries themselves.
-                speed_measurement_bool = ((local_step - 1) % args.summary_small_every_nsteps < batch_size)
+                speed_measurement_bool = ((local_step - batch_size) % args.summary_small_every_nsteps < batch_size)
                 small_summary_bool = (local_step % args.summary_small_every_nsteps < batch_size)
                 large_summary_bool = (local_step % args.summary_large_every_nsteps < batch_size)
                 metrics_summary_bool = (local_step % args.metrics_every_nsteps < batch_size)
 
                 # Run training step, including summaries
                 if large_summary_bool:
-                    _, _, summary_s, summary_l, d_loss, g_loss = sess.run(
-                         [train_gen, train_disc, summary_small, summary_large,
+                    _, _, summary_props, summary_s, summary_l, d_loss, g_loss = sess.run(
+                         [train_gen, train_disc, summary_training_props, summary_small_with_gradients, summary_large,
                           disc_loss, gen_loss], feed_dict={real_image_input: batch})
                 elif small_summary_bool:
-                    _, _, summary_s, d_loss, g_loss = sess.run(
-                         [train_gen, train_disc, summary_small,
+                    _, _, summary_props, summary_s, d_loss, g_loss = sess.run(
+                         [train_gen, train_disc, summary_training_props, summary_small_with_gradients,
                           disc_loss, gen_loss], feed_dict={real_image_input: batch})
                 else:
                     _, _, d_loss, g_loss = sess.run(
                          [train_gen, train_disc, disc_loss, gen_loss],
                          feed_dict={real_image_input: batch})
+                # Update EMA right after training step
+                sess.run(ema_op)
 
                 # Run validation loss
                 if large_summary_bool or small_summary_bool:
                     batch_val = npy_data_validation.batch(batch_size)
                     batch_val = data.normalize_numpy(batch_val, args.data_mean, args.data_stddev, verbose)
+                    # Compute validation loss on training weights (noisy)
                     summary_s_val = sess.run(summary_small_validation, feed_dict={real_image_input: batch_val})
+                    # Compute train loss on ema weights (less noisy)
+                    sess.run(assign_ema_weights) # Takes only ~ 2 ms
+                    summary_s_val_ema = sess.run(summary_small_EMA, feed_dict={real_image_input: batch})
+                    if large_summary_bool:
+                        summary_l_ema = sess.run(summary_large_EMA, feed_dict={real_image_input: batch})
+                    sess.run(restore_original_weights)
 
                 #print("Completed step")
                 global_step += batch_size * global_size
@@ -394,7 +399,6 @@ def optuna_objective(trial, args, config):
                 if mixing_bool:
                     sess.run(update_alpha)
 
-                sess.run(ema_op)
                 in_phase_step = sess.run(update_intra_phase_step)
 
                 if metrics_summary_bool:
@@ -402,6 +406,10 @@ def optuna_objective(trial, args, config):
                         # if verbose:
                             # print('Computing and writing metrics...')
                         metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose)
+                        # Compute and save metrics based on EMA weights
+                        sess.run(assign_ema_weights)
+                        metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose, suffix='_EMA')
+                        sess.run(restore_original_weights)
 
                         # Optuna pruning and return value:
                         last_fid = metrics['FID']
@@ -419,29 +427,31 @@ def optuna_objective(trial, args, config):
                             if (args.horovod and (hvd.rank() == 0)):
                                 print("Sending signal to other horovod workers that trial has been pruned and they should return")
                                 MPI.COMM_WORLD.bcast(should_prune, root = 0)
-                            if should_prune:
+                            # Disable pruning for the first args.optuna_warmup_steps of each resolution phase
+                            if should_prune and (in_phase_step > args.optuna_warmup_steps):
                                 raise optuna.TrialPruned()
                         elif hyperparam_opt_intra_trial and (hvd.rank() != 0):
                             should_prune = False
                             should_prune = MPI.COMM_WORLD.bcast(should_prune, root = 0)
-                            if should_prune:
+                            # Disable pruning for the first args.optuna_warmup_steps of each resolution phase
+                            if should_prune and (in_phase_step > args.optuna_warmup_steps):
                                 print(f"Received signal from rank 0 that trial {trial.number} should be pruned. Returning...")
                                 return last_fid
-
 
                 if verbose:
                     if large_summary_bool:
                         if not hyperparam_opt_inter_trial:
-                            print('Writing large summary...')
-                        writer.add_summary(summary_s, global_step)
-                        writer.add_summary(summary_s_val, global_step)
+                            print('Writing summary images...')
                         writer.add_summary(summary_l, global_step)
-                    elif small_summary_bool:
+                        writer.add_summary(summary_l_ema, global_step)
+                    if large_summary_bool or small_summary_bool:
                         if not hyperparam_opt_inter_trial:
-                            print('Writing small summary...')
+                            print('Writing summary scalars...')
+                        writer.add_summary(summary_props, global_step)
                         writer.add_summary(summary_s, global_step)
                         writer.add_summary(summary_s_val, global_step)
-                    elif speed_measurement_bool:
+                        writer.add_summary(summary_s_val_ema, global_step)
+                    if speed_measurement_bool:
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
                     if args.optuna_use_best_trial or args.optuna_ntrials == 1 or hyperparam_opt_intra_trial or normal_run:
@@ -477,6 +487,7 @@ def optuna_objective(trial, args, config):
                 # Since the sampling is random for each worker, doing this with all workers could result in some samples being seen by multiple times, with others not being seen at all.
                 # Set horovod to False explicitely, otherwise rank 0 will wait forever for a response from the other ranks.
                 print(f"Computing final metrics for phase {phase} ...")
+                sess.run(assign_ema_weights)
                 if args.compute_metrics_test:
                     start_metrics_test = time.time()
                     metrics_test = save_metrics(None, sess, npy_data_test, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), False, get_compute_metrics_dict(args), len(npy_data_test), args.data_mean, args.data_stddev, verbose)
@@ -487,6 +498,7 @@ def optuna_objective(trial, args, config):
                 if args.compute_metrics_validation:
                     start_metrics_val = time.time()
                     metrics_val = save_metrics(None, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), False, get_compute_metrics_dict(args), len(npy_data_validation), args.data_mean, args.data_stddev, verbose)
+                    
                     end_metrics_val = time.time()
                     print(f"Computing metrics on validation set took {end_metrics_val - start_metrics_val} seconds")
                     print("Validation dataset metrics:")
@@ -500,6 +512,7 @@ def optuna_objective(trial, args, config):
                     print(f"Computing metrics on training set took {end_metrics_train - start_metrics_train} seconds")
                     print("Training dataset metrics:")
                     print(metrics_train)
+                sess.run(restore_original_weights)
                     
                 if trial is not None:
                     # Only for inter-trial parallelism: each worker has its own trial, so should report its own parameters. Otherwise, only rank 0 should report
