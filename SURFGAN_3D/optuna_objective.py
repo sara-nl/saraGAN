@@ -15,7 +15,7 @@ from mpi4py import MPI
 
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
-from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables, print_summary_to_stdout, dump_weight_for_debugging
+from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables, print_summary_to_stdout
 import dataset as data
 from optuna_suggestions import optuna_override_undefined
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
