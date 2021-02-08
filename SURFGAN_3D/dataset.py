@@ -10,8 +10,7 @@ import psutil
 import copy
 import random
 
-# TEMPORARY, only for debugging:
-import horovod.tensorflow as hvd
+from mpi4py import MPI
 
 def stdnormal_to_8bit_numpy(normalized_input, verbose):
     """Maps standard normalized channels (mean=0, stddev=1) to 8-bit channels ([0,255]).
@@ -255,8 +254,10 @@ class NumpyPathDataset:
     def _load_batch_from_filelist(self, batch_paths):
         """Takes a list of numpy files, loads the numpy files, stacks them, and inserts an extra color channel"""
 
-        batch = np.stack([np.load(path) for path in batch_paths])
-        batch = batch[:, np.newaxis, ...]
+        batch = [np.load(path) for path in batch_paths]
+        if len(batch) > 0:
+            batch = np.stack(batch)
+            batch = batch[:, np.newaxis, ...]
 
         return batch
 
@@ -266,6 +267,8 @@ class NumpyPathDataset:
             batch_size: size of the batch that should be returned
             auto_repeat: automatically call NumpyPathDataset.repeat() to refill the sample buffer with the contents of self.scratch_files (in randomized order).
             verbose: will print the path names for the batches. Typically only for debugging.
+        Returns:
+            Batch of samples (np.array)
         """
         if batch_size > len(self.samplebuffer):
             if auto_repeat:
@@ -284,6 +287,57 @@ class NumpyPathDataset:
             print("Got batch:")
             for element in batch_paths:
                 print(element)
+
+        return self._load_batch_from_filelist(batch_paths)
+
+    def batch_mpi(self, batch_size, auto_repeat = True, verbose=False):
+        """Returns a batch of numpy arrays from the sample buffer of rank 0.
+        If all workers sample individually (with batch()), some samples may be seen multiple times, while others may not be seen by any worker.
+        For batch_mpi, since all workers sample from the buffer of rank 0 rather than sampling individually, all samples will be seen by a single worker before the dataset is repeated.
+        From a parallel computing sense, batch() duplicates work, whil batch_mpi() distributes work.
+        Note that all workers will have to call batch_mpi in order to avoid a deadlock or other indeterminate behaviour.
+        Parameters:
+            batch_size: size of the batch that should be returned (per worker)
+            auto_repeated: have rank 0 automatically call NumpyPathDataset.repeat() to refill the sample buffer with the contents of self.scratch_files (in randomized order).
+            verbose: will print the path names for the batches. Typically only for debugging
+        Returns:
+            Returns:
+            Batch of samples (np.array)
+        """
+        if MPI.COMM_WORLD.Get_rank() == 0:
+            global_batch_size = batch_size * MPI.COMM_WORLD.Get_size()
+            if global_batch_size > len(self.samplebuffer):
+                if auto_repeat:
+                    self.repeat()
+                    # Call batch_new again, since in theory if batch_size >> len(self.scratch_files), the samplebuffer may need to be extended multiple times
+                    return self.batch_mpi(batch_size, auto_repeat, verbose)
+                else:
+                    # Just return whatever is left in the samplebuffer. Note that this will be fewer samples than the specified batch_size and may cause problems in the code
+                    batch_paths = self.samplebuffer
+                    # Pad with 'None', otherwise our reshape will fail later on
+                    while len(batch_paths) % MPI.COMM_WORLD.Get_size() > 0:
+                        batch_paths.append(None)
+            else:
+                # First part of the samplebuffer becomes the batch, the rest becomes the new samplebuffer
+                batch_paths = self.samplebuffer[0:global_batch_size]
+                self.samplebuffer = self.samplebuffer[global_batch_size:]
+            # Reshape into an array of which the first dim is MPI.COMM_WORLD.Get_size(). This is the dim along which scatter scatters the lists over workers.
+            batch_paths = np.transpose(np.array(batch_paths).reshape(-1, MPI.COMM_WORLD.Get_size())).tolist()
+        else: # initialize batch_paths for all other ranks
+            batch_paths = None
+
+        # Now that rank 0 has read the batch_paths, call MPI scatter
+        if verbose:
+            print(f"Worker: {MPI.COMM_WORLD.Get_rank()}. Before scatter batch_paths: {batch_paths}")
+
+        batch_paths = MPI.COMM_WORLD.scatter(batch_paths, root=0)
+
+        # Strip 'None' from the end of batch_paths
+        while len(batch_paths) > 0 and batch_paths[-1] is None:
+            batch_paths.pop()
+
+        if verbose:
+            print(f"Worker: {MPI.COMM_WORLD.Get_rank()}. Got batch: {batch_paths}")
 
         return self._load_batch_from_filelist(batch_paths)
         
@@ -318,8 +372,26 @@ if __name__ == "__main__":
         np.save(filename, a)
 
     print(f"Savepath: {savepath}")
-    npy_data = NumpyPathDataset(savepath, scratch, True, True)
 
-    npy_data.batch(7, True, True)
+    if MPI.COMM_WORLD.Get_size() > 1:
+        print(f"\nWorker: {MPI.COMM_WORLD.Get_rank()}. Testing batch_mpi(), no autorepeat")
+        npy_data = NumpyPathDataset(savepath, scratch, True, True)
+        npy_data.batch_mpi(3, False, True)
+        npy_data.batch_mpi(3, False, True)
+
+        print(f"\nWorker: {MPI.COMM_WORLD.Get_rank()}. Testing batch_mpi(), with autorepeat")
+        npy_data = NumpyPathDataset(savepath, scratch, True, True)
+        npy_data.batch_mpi(3, True, True)
+        npy_data.batch_mpi(3, True, True)
+    else:
+        print(f"\nTesting batch(), no autorepeat")
+        npy_data = NumpyPathDataset(savepath, scratch, True, True)
+        npy_data.batch(7, False, True)
+        npy_data.batch(7, False, True)
+
+        print(f"\nTesting batch(), with autorepeat")
+        npy_data = NumpyPathDataset(savepath, scratch, True, True)
+        npy_data.batch(7, True, True)
+        npy_data.batch(7, True, True)
+
     
-    npy_data.batch(7, True, True)
