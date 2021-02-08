@@ -86,7 +86,13 @@ def save_metrics(writer, sess, npy_data, gen_sample, batch_size, global_size, gl
         # else:
         #     start_loc = 0
 
-        real_batch = npy_data.batch(batch_size)
+        # If using horovod: get batches with batch_mpi, which distributes samples from rank 0.
+        # Allows e.g. to compute the metrics on the full validation set, i.e. seeing each image (exactly) once.
+        if horovod:
+            real_batch = npy_data.batch_mpi(batch_size, True, True)
+            print(f'Worker: {hvd.rank()}. Metrics local batch size: {len(real_batch)}. Counter: {counter}')
+        else:
+            real_batch = npy_data.batch(batch_size)
         real_batch = data.normalize_numpy(real_batch, data_mean, data_stddev, verbose)
         fake_batch = []
         # Fake images are always generated with the batch size used for training
