@@ -141,14 +141,7 @@ def optuna_objective(trial, args, config):
         d_lr = tf.Variable(d_lr, name='d_lr', dtype=tf.float32)
         g_lr = tf.Variable(g_lr, name='g_lr', dtype=tf.float32)
 
-        optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-        optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
-        #optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=g_lr)
-        #optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=d_lr)
-        # optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
-        # optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=1e-3)
-        # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
-        # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+        optimizer_gen, optimizer_disc = opt.get_optimizer(d_lr, g_lr, args)
 
         intra_phase_step = tf.Variable(0, name='step', dtype=tf.int32)
         update_intra_phase_step = intra_phase_step.assign_add(batch_size*global_size)
@@ -339,7 +332,10 @@ def optuna_objective(trial, args, config):
                         saver.save(sess, os.path.join(logdir, f'model_{phase}_ckpt_{global_step}'))
 
                 # Get randomly selected batch
-                batch = npy_data_train.batch(batch_size)
+                if args.horovod:
+                    batch = npy_data.batch_mpi(batch_size)
+                else:
+                    batch = npy_data.batch(batch_size)
             
                 # Normalize data (but only if args.data_mean AND args.data_stddev are defined)
                 batch = data.normalize_numpy(batch, args.data_mean, args.data_stddev, verbose)

@@ -3,6 +3,46 @@ import numpy as np
 
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
 
+def get_optimizer(d_lr, g_lr, args):
+    """Check args.optimizer and return a tf.Optimizer object. The tf.Optimizer is initialized with parameters from args.
+    Parameters:
+        d_lr: A tf.Variable representing the discriminator learning rate. We use a tf.Variable, and not args.d_lr directly since this allows adaptation of the learning rate during training.
+        g_lr: A tf.Variable representing the generator learning rate.
+        args: the parsed command line arguments.
+    Returns: optimizer_gen, optimizer_disc, a tuple with optimizers for the generator and discriminator, respectively (tf.Optimizer, tf.Optimizer)"""
+
+    # Create the right optimizer
+    if args.optimizer == 'Adam':
+        optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.adam_beta1, beta2=args.adam_beta2)
+    elif args.optimizer == 'SGD':
+        optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=g_lr)
+    elif args.optimizer == 'Adadelta':
+        optimizer_gen = tf.train.AdadeltaOptimizer(learning_rate=g_lr, rho=args.rho, epsilon=1e-07)
+    elif args.optimizer == 'Momentum':
+        optimizer_gen = tf.train.MomentumOptimizer(learning_rate = g_lr, momentum = args.momentum, use_nesterov = True)
+    else:
+        print(f"ERROR: optimizer argument {args.optimizer} not recognized or implemented")
+        raise NotImplementedError
+
+    if args.d_optimizer == 'Adam':
+        optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.d_adam_beta1, beta2=args.d_adam_beta2)
+    elif args.d_optimizer == 'SGD':
+        optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=d_lr)
+    elif args.d_optimizer == 'Adadelta':
+        optimizer_disc = tf.train.AdadeltaOptimizer(learning_rate=d_lr, rho=args.d_rho, epsilon=1e-07)
+    elif args.d_optimizer == 'Momentum':
+        optimizer_disc = tf.train.MomentumOptimizer(learning_rate = d_lr, momentum = args.d_momentum, use_nesterov = True)
+    else:
+        print(f"ERROR: optimizer argument {args.d_optimizer} not recognized or implemented")
+        raise NotImplementedError
+
+    #optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=g_lr)
+    #optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=d_lr)
+    
+    # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+    # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+
+    return optimizer_gen, optimizer_disc
 
 def minimize_with_clipping(optimizer, loss, var_list, clipping):
     """Does minimization by calling compute_gradients and apply_gradients, but optionally clips the gradients in between.
