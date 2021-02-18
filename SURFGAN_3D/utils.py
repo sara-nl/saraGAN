@@ -63,7 +63,7 @@ def print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_lo
             # f"memory {memory_percentage:.4f} % \t"
             f"alpha {alpha.eval():.2f}")
 
-def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_list, verbose):
+def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_list, verbose, ema=None):
     """Restores variables either from a previous checkpoint, or from the previous phase.
     Parameters:
         sess: tf.session to restore the variables with
@@ -72,6 +72,7 @@ def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_li
         logdir: current logging directory, where checkpoints per phase are stored.
         continue_path: path to a model checkpoint. If the phase is the starting phase, this model checkpoint is used to restore variables
         verbose: should output be printed
+        exponential moving average: a tf.train.exponential_moving_average object to which the variables should also be restored
     Returns:
         None
     """
@@ -85,9 +86,18 @@ def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_li
     var_names = [v.name for v in var_list]
     trainable_variable_names = [v.name for v in tf.trainable_variables()]
     load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
-    print(f"load_vars: {load_vars}")
+    not_loaded_vars = [sess.graph.get_tensor_by_name(n) for n in trainable_variable_names if n not in var_names]
+    if verbose:
+        print(f"INFO: Restoring trainable variables: {load_vars}")
+        if len(not_loaded_vars) > 0:
+        print(f"INFO: The following trainable variables will not be restored (generally because you are restoring from a checkpoint from the previous phase): {not_loaded_vars}")
     saver = tf.train.Saver(load_vars)
     saver.restore(sess, restore_path)
+
+    if ema is not None:
+        restore_ema = tf.group([tf.assign(ema.average(var), var) for var in var_list]) # Op for restoring an ema based on the restored variables in a checkpoint
+        sess.run(restore_ema)
+
     if verbose:
         print("Variables restored!")
 
