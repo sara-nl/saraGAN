@@ -138,7 +138,7 @@ def main(args, config):
 
         # Then, make all other workers load the study
         if hvd.rank() != 0:
-            study = optuna.load_study(study_name = study_name, storage = storage_sqlite, pruner = current_pruner)
+            study = optuna.load_study(study_name = study_name, storage = storage_sqlite, pruner = current_pruner, sampler = current_sampler)
         
         if args.optuna_ntrials is not None:
             ntrials = np.ceil(args.optuna_ntrials/hvd.size())
@@ -236,14 +236,15 @@ if __name__ == '__main__':
     parser.add_argument('--network_size', default=None, choices=['xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl'], required=True)
     parser.add_argument('--activation', type=str, default='leaky_relu')
     parser.add_argument('--leakiness', type=float, default=0.2)
+    parser.add_argument('--conv_kernel_size', type=none_or_int, nargs="+", default=[3,3,3], help="Shape of the convolutional kernels to be used in convolution layers, e.g. --conv_kernel 3 3 3 will result in convolutional kernel of [3,3,3]. Note that if the data size is smaller than the kernel size in any dimension, the code will automatically shrink the kernel to largest odd kernel size that fits the data. E.g. with data of [4,4,2] and a kernel of [5,3,1], the effective kernel size will be [3,3,1]. Pass 'None' to have it optimized by Optuna")
 
     # Learning rate
     parser.add_argument('--g_lr', type=float, default=None)
     parser.add_argument('--d_lr', type=float, default=None)
-    parser.add_argument('--g_lr_increase', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to g_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of g_lr')
-    parser.add_argument('--g_lr_decrease', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from g_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of g_lr')
-    parser.add_argument('--d_lr_increase', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to d_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of d_lr')
-    parser.add_argument('--d_lr_decrease', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from d_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of d_lr')
+    parser.add_argument('--g_lr_increase', type=none_or_str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to g_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of g_lr')
+    parser.add_argument('--g_lr_decrease', type=none_or_str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from g_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of g_lr')
+    parser.add_argument('--d_lr_increase', type=none_or_str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to d_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of d_lr')
+    parser.add_argument('--d_lr_decrease', type=none_or_str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from d_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of d_lr')
     parser.add_argument('--g_lr_rise_niter', type=int, default=None, help='If a learning rate schedule with a gradual increase in the beginning of a phase is defined for the generator, this number defines within how many iterations the maximum is reached.')
     parser.add_argument('--g_lr_decay_niter', type=int, default=None, help='If a learning rate schedule with a gradual decrease at the end of a phase is defined for the generator, this defines within how many iterations the minimum is reached.')
     parser.add_argument('--d_lr_rise_niter', type=int, default=None, help='If a learning rate schedule with a gradual increase in the beginning of a phase is defined for the discriminator, this number defines within how many iterations the maximum is reached.')
