@@ -90,7 +90,7 @@ def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_li
     if verbose:
         print(f"INFO: Restoring trainable variables: {load_vars}")
         if len(not_loaded_vars) > 0:
-        print(f"INFO: The following trainable variables will not be restored (generally because you are restoring from a checkpoint from the previous phase): {not_loaded_vars}")
+            print(f"INFO: The following trainable variables will not be restored (generally because you are restoring from a checkpoint from the previous phase): {not_loaded_vars}")
     saver = tf.train.Saver(load_vars)
     saver.restore(sess, restore_path)
 
