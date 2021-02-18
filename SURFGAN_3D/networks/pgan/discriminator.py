@@ -1,17 +1,17 @@
 from networks.ops import *
 
 
-def discriminator_block(x, filters_in, filters_out, activation, param=None):
+def discriminator_block(x, filters_in, filters_out, activation, kernel_shape, param=None):
     with tf.variable_scope('conv_1'):
         shape = x.get_shape().as_list()[2:]
-        kernel = [k(s) for s in shape]
+        kernel = get_kernel(shape, kernel_shape)
         x = conv3d(x, filters_in, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
     with tf.variable_scope('conv_2'):
 
         shape = x.get_shape().as_list()[2:]
-        kernel = [k(s) for s in shape]
+        kernel = get_kernel(shape, kernel_shape)
         x = conv3d(x, filters_out, kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
@@ -19,11 +19,11 @@ def discriminator_block(x, filters_in, filters_out, activation, param=None):
     return x
 
 
-def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
+def discriminator_out(x, base_dim, latent_dim, filters_out, activation, kernel_shape, param):
     with tf.variable_scope(f'discriminator_out'):
         # x = minibatch_stddev_layer(x)
         shape = x.get_shape().as_list()[2:]
-        kernel = [k(s) for s in shape]
+        kernel = get_kernel(shape, kernel_shape)
 #        x = conv3d(x, filters_out, kernel, activation=activation, param=param)
         # base_dim = num_filters for the first generator layer after the latent space. Discriminator should mirror that.
         x = conv3d(x, base_dim, kernel, activation=activation, param=param)
@@ -40,7 +40,7 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, param):
         return x
 
 
-def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim, activation, param=None, is_reuse=False, size='medium', conditioning=None):
+def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim, activation, kernel_shape, param=None, is_reuse=False, size='medium', conditioning=None):
 
     if conditioning is not None:
         raise NotImplementedError()
@@ -61,7 +61,7 @@ def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim,
             with tf.variable_scope(f'discriminator_block_{i}'):
                 filters_in = num_filters(i, num_phases, base_shape, base_dim, size=size)
                 filters_out = num_filters(i - 1, num_phases, base_shape, base_dim, size=size)
-                x = discriminator_block(x, filters_in, filters_out, activation, param=param)
+                x = discriminator_block(x, filters_in, filters_out, activation, kernel_shape, param=param)
 
             if i == phase:
                 with tf.variable_scope(f'from_rgb_{phase - 1}'):
@@ -71,7 +71,7 @@ def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim,
 
                 x = alpha * fromrgb_prev + (1 - alpha) * x
 
-        x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, param)
+        x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, kernel_shape, param)
         return x
 
 
@@ -85,7 +85,7 @@ if __name__ == '__main__':
         shape = [1, 1] + list(np.array(base_shape)[1:] * 2 ** (phase - 1))
         print(shape)
         x = tf.random.normal(shape=shape)
-        y = discriminator(x, 0.5, phase, num_phases, base_dim, latent_dim, activation='leaky_relu', param=0.3)
+        y = discriminator(x, 0.5, phase, num_phases, base_dim, latent_dim, activation='leaky_relu', kernel_shape = [3, 3, 3], param=0.3)
 
         loss = tf.reduce_sum(y)
         optim = tf.train.GradientDescentOptimizer(1e-5)

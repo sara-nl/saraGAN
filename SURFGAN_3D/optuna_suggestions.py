@@ -231,5 +231,17 @@ def optuna_override_undefined(args, trial):
             print(f"args.d_momentum = {args.d_momentum} (from: optuna trial)")
     elif verbose and not d_momentum_set:
         print(f"args.d_momentum = {args.d_momentum} (from: command line argument)")
+
+    for i in range(0, len(args.conv_kernel_size)):
+        if args.conv_kernel_size[i] is None:
+            # Suggest some odd number as kernel size.
+            args.conv_kernel_size[i] = trial.suggest_int(f"Kernel_size_{i}", 1, 9, 2)
+            if verbose:
+                print(f"args.conv_kernel_size[{i}] = {args.conv_kernel_size[i]} (from: optuna trial)")
+        else:
+            if verbose:
+                print(f"args.conv_kernel_size[{i}] = {args.conv_kernel_size[i]} (from: command line argument)")
+
+        
         
     return args

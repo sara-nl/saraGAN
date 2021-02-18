@@ -28,6 +28,35 @@ def k(x):
     else:
         return 3
 
+def get_kernel(x_shape, desired_k_shape):
+    """Returns a kernel shape. It will try to honor the desired kernel shape, 
+    but will check that the dimensions of x are large enough to support that. 
+    If not, it will return the largest kernel that does fit. It will always use odd number for kernel size.
+    Example: with get_kernel([4,4,2], [5,3,3]) will return [3,3,1] since that is the largest kernel with odd sizes that fits x_shape.
+    Parameters:
+        x_shape: the (spatial part of the) shape of the tensor upon which the kernel will be applied. 
+                 E.g. if the first two dimensions of x are the batch and channel dimension, 
+                 one should pass x_shape = x.get_shape().as_list()[2:] in order to pass only the spatial dimensions
+        desired_k_shape: the desired kernel shape, e.g. [5, 5, 3]
+    Returns:
+        An N-element list representing the (spatial) kernel shape, that has potentially been adjusted so that it will fit within the size of x_shape.
+    """
+    # Should always be equal. This function doesn't make sense otherwise.
+    if len(x_shape ) != len(desired_k_shape):
+        print(f"x_shape: {x_shape}. desired_k_shape: {desired_k_shape}")
+    assert len(x_shape) == len(desired_k_shape)
+    kernel = []
+    for x_i, k_i in zip(x_shape, desired_k_shape):
+        if x_i < k_i:
+            if (x_i % 2) == 0:
+                kernel.append(x_i-1)
+            else:
+                kernel.append(x_i)
+        else:
+            kernel.append(k_i)
+            
+    return kernel
+
 def calculate_gain(activation, param=None):
     linear_fns = ['linear', 'conv1d', 'conv2d', 'conv3d', 'conv_transpose1d', 'conv_transpose2d', 'conv_transpose3d']
     if activation in linear_fns or activation == 'sigmoid':

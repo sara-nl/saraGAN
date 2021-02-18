@@ -138,12 +138,12 @@ def optuna_objective(trial, args, config):
         # Scale learning rate to compensate for data parallel training, if a scaling strategy is specified
         g_lr, d_lr = scale_lr(args.g_lr, args.d_lr, args.g_scaling, args.d_scaling, args.horovod)
 
-        d_lr = tf.Variable(d_lr, name='d_lr', dtype=tf.float32)
-        g_lr = tf.Variable(g_lr, name='g_lr', dtype=tf.float32)
+        d_lr = tf.Variable(d_lr, name='d_lr', dtype=tf.float32, trainable = False)
+        g_lr = tf.Variable(g_lr, name='g_lr', dtype=tf.float32, trainable = False)
 
         optimizer_gen, optimizer_disc = opt.get_optimizer(d_lr, g_lr, args)
 
-        intra_phase_step = tf.Variable(0, name='step', dtype=tf.int32)
+        intra_phase_step = tf.Variable(0, name='step', dtype=tf.int32, trainable = False)
         update_intra_phase_step = intra_phase_step.assign_add(batch_size*global_size)
 
         # Turn arguments into constant Tensors
@@ -175,7 +175,7 @@ def optuna_objective(trial, args, config):
         # NETWORKS
 
         with tf.variable_scope('alpha'):
-            alpha = tf.Variable(1, name='alpha', dtype=tf.float32)
+            alpha = tf.Variable(1, name='alpha', dtype=tf.float32, trainable=False)
 
         # Alpha ops
         init_alpha = alpha.assign(1)
@@ -197,6 +197,7 @@ def optuna_objective(trial, args, config):
             get_num_phases(args.start_shape, args.final_shape),
             base_dim,
             get_base_shape(args.start_shape),
+            args.conv_kernel_size,
             args.activation,
             args.leakiness,
             args.network_size,
@@ -263,8 +264,20 @@ def optuna_objective(trial, args, config):
             sess.run(init_op)
             
             # Do variables need to be restored? (either from the previous phase, or from a previous run)
-            if (phase > args.starting_phase) or (args.continue_path and phase == args.starting_phase):
-                restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, var_list, verbose)
+            if (phase > args.starting_phase):
+                if verbose:
+                    print(f"We are in phase {phase}, restoring variables from phase {phase-1}")
+                restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, var_list, verbose, ema)
+            elif (args.continue_path and phase == args.starting_phase):
+                if verbose:
+                    print(f"We are starting in phase {phase}, restoring variables from {args.continue_path}")
+                # If the checkpoint file contains variables for all layers in the current phase. Typically this means we are continueing training in the middle of a phase
+                try:
+                    restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, all_vars, verbose, ema)
+                # If the try failed, apparently not all layers are present in the current checkpoint file. Typically this means we are continueing with a new phase, 
+                # based on the checkpoint saved at the end of the previous phase.
+                except:
+                    restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, var_list, verbose, ema)                
             else:
                 if verbose:
                     print("Not restoring variables.")
@@ -308,6 +321,8 @@ def optuna_objective(trial, args, config):
             # Do we start with a mixing phase? (normally we do, unless we resume e.g. from a point in the stabilization phase)
             if args.mixing_nimg > 0:
                 mixing_bool = True
+            else:
+                mixing_bool = False
 
             while True:
                 start = time.time()
