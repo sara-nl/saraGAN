@@ -6,6 +6,7 @@ import horovod.tensorflow as hvd
 import time
 import random
 import optuna
+import json
 
 from utils import get_verbosity, print_study_summary
 from mpi4py import MPI
@@ -206,6 +207,15 @@ if __name__ == '__main__':
             return None
         return int(value)
 
+    def kernel_spec(value):
+        with open(value) as json_file:
+            data = json.load(json_file)
+        return data['kernel_spec']
+    def filter_spec(value):
+        with open(value) as json_file:
+            data = json.load(json_file)
+        return data['filter_spec']
+
     parser = argparse.ArgumentParser()
     parser.add_argument('architecture', type=str)
     parser.add_argument('dataset_path', type=str)
@@ -237,6 +247,8 @@ if __name__ == '__main__':
     parser.add_argument('--activation', type=str, default='leaky_relu')
     parser.add_argument('--leakiness', type=float, default=0.2)
     parser.add_argument('--conv_kernel_size', type=none_or_int, nargs="+", default=[3,3,3], help="Shape of the convolutional kernels to be used in convolution layers, e.g. --conv_kernel 3 3 3 will result in convolutional kernel of [3,3,3]. Note that if the data size is smaller than the kernel size in any dimension, the code will automatically shrink the kernel to largest odd kernel size that fits the data. E.g. with data of [4,4,2] and a kernel of [5,3,1], the effective kernel size will be [3,3,1]. Pass 'None' to have it optimized by Optuna")
+    parser.add_argument('--kernel_spec', type=kernel_spec, default = None, help = "A kernel specification file (in JSON) that lists the convolutional kernel shapes to be used in each layer. The JSON file should define this under the 'kernel_spec' keyword.")
+    parser.add_argument('--filter_spec', type=filter_spec, default = None, help = "A specification file (in JSON) that lists the amount of filters to be used in each layer. The JSON file should define this under the 'filter_spec' keyword. Note that the kernel_spec and filter_spec may be stored in the same JSON, but you will have to supply both arguments.")
 
     # Learning rate
     parser.add_argument('--g_lr', type=float, default=None)

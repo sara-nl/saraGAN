@@ -198,6 +198,7 @@ def optuna_objective(trial, args, config):
             base_dim,
             get_base_shape(args.start_shape),
             args.conv_kernel_size,
+            args.kernel_spec, args.filter_spec,
             args.activation,
             args.leakiness,
             args.network_size,
@@ -212,7 +213,7 @@ def optuna_objective(trial, args, config):
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
             print(f"Discriminator parameters:: {count_parameters('discriminator')}")
-
+        
         # Create an exponential moving average of generator weights. We update this every step.
         gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
