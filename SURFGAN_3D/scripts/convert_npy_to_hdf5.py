@@ -3,6 +3,7 @@ import glob
 import argparse
 import os
 import numpy as np
+import multiprocessing
 
 parser = argparse.ArgumentParser(description='Get path to npy dataset')
 parser.add_argument('--datadir', type=str, help='Full path to the directory which holds the directories for the different resolutions. In turn, these resolution-specific directories hold the numpy files')
@@ -14,7 +15,11 @@ res_dirs = [res for res in resolution_dirs if os.path.isdir(res)]
 
 print(f"Resolution_dirs: {res_dirs}")
 
-for res_dir in res_dirs:
+#for res_dir in res_dirs:
+a_pool = multiprocessing.Pool()
+a_pool.map(loop_element, res_dirs)
+
+def loop_element(res_dir):
     with h5py.File(f'{os.path.join(args.outdir, os.path.basename(res_dir))}.h5py', 'w-') as f:
         files_in_res = glob.glob(os.path.join(res_dir,'*.npy'))
         # Store each numpy file as a HDF5 dataset:
