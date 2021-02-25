@@ -10,11 +10,11 @@ parser.add_argument('--outdir', type=str, help='Full path to store the output. D
 args = parser.parse_args()
 
 resolution_dirs = glob.glob(args.datadir + '*x*')
-#res_dirs = [os.path.basename(res) for res in resolution_dirs_full]
+res_dirs = [res for res in resolution_dirs if os.path.isdir(res)]
 
-print(f"Resolution_dirs: {resolution_dirs}")
+print(f"Resolution_dirs: {res_dirs}")
 
-for res_dir in resolution_dirs:
+for res_dir in res_dirs:
     with h5py.File(f'{os.path.join(args.outdir, os.path.basename(res_dir))}.h5py', 'w') as f:
         files_in_res = glob.glob(os.path.join(res_dir,'*.npy'))
         # Store each numpy file as a HDF5 dataset:
