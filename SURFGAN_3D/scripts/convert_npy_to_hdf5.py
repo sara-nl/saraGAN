@@ -15,10 +15,6 @@ res_dirs = [res for res in resolution_dirs if os.path.isdir(res)]
 
 print(f"Resolution_dirs: {res_dirs}")
 
-#for res_dir in res_dirs:
-a_pool = multiprocessing.Pool()
-a_pool.map(loop_element, res_dirs)
-
 def loop_element(res_dir):
     with h5py.File(f'{os.path.join(args.outdir, os.path.basename(res_dir))}.h5py', 'w-') as f:
         files_in_res = glob.glob(os.path.join(res_dir,'*.npy'))
@@ -28,4 +24,10 @@ def loop_element(res_dir):
             dataset_name = os.path.basename(npy_file_path.replace('.npy', ''))
             print(f"Storing file: {npy_file_path} as HDF5 dataset {dataset_name}")
             f.create_dataset(name=dataset_name, data=npy_array, dtype=npy_array.dtype)
+
+#for res_dir in res_dirs:
+a_pool = multiprocessing.Pool()
+a_pool.map(loop_element, res_dirs)
+
+
         
