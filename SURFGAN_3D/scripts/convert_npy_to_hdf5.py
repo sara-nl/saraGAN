@@ -6,6 +6,7 @@ import numpy as np
 
 parser = argparse.ArgumentParser(description='Get path to npy dataset')
 parser.add_argument('--datadir', type=str, help='Full path to the directory which holds the directories for the different resolutions. In turn, these resolution-specific directories hold the numpy files')
+parser.add_argument('--outdir', type=str, help='Full path to store the output. Directory must exist.')
 args = parser.parse_args()
 
 resolution_dirs = glob.glob(args.datadir + '*x*')
@@ -14,7 +15,7 @@ resolution_dirs = glob.glob(args.datadir + '*x*')
 print(f"Resolution_dirs: {resolution_dirs}")
 
 for res_dir in resolution_dirs:
-    with h5py.File(f'{os.path.basename(res_dir)}.h5py', 'w') as f:
+    with h5py.File(f'{os.path.join(args.outdir, os.path.basename(res_dir))}.h5py', 'w') as f:
         files_in_res = glob.glob(os.path.join(res_dir,'*.npy'))
         # Store each numpy file as a HDF5 dataset:
         for npy_file_path in files_in_res:
