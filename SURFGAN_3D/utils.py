@@ -95,7 +95,9 @@ def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_li
     saver.restore(sess, restore_path)
 
     if ema is not None:
-        restore_ema = tf.group([tf.assign(ema.average(var), var) for var in var_list]) # Op for restoring an ema based on the restored variables in a checkpoint
+        # Op for restoring an ema based on the restored variables in a checkpoint
+        # Note that ema.average(var) is None at the beginning of a phase. In that case, don't restore - it doesn't make sense anyway, the ema should start 'fresh' at the start of a phase
+        restore_ema = tf.group([tf.assign(ema.average(var), var) for var in var_list if ema.average(var) is not None])
         sess.run(restore_ema)
 
     if verbose:
@@ -222,6 +224,11 @@ def get_logdir(args):
     else:
         timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
         logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
+
+    # If running optuna_distributed, each MPI rank is running it's own training run and the checkpoints should be seperated
+    # Thus, append the rank to the logdir to ensure this
+    if args.optuna_distributed:
+        logdir = os.path.join(logdir, str(hvd.rank()))
 
     if get_verbosity(args.horovod, args.optuna_distributed):
         print(f"Saving files to {logdir}")
