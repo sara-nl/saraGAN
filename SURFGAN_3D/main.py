@@ -29,7 +29,7 @@ def main(args, config):
     optuna.logging.set_verbosity(optuna.logging.DEBUG)
 
     # Raised errors that should be caught, but trials should just continue (errors are e.g. thrown when OOM)
-    catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError, tf.errors.InvalidArgumentError)
+    catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError, tf.errors.InvalidArgumentError, tf.errors.ResourceExhaustedError)
 
     # We support several types of runs:
     # Load hyperparameters from the best trial in an optuna database, do a (potentially data-parallel) convergence run
@@ -61,7 +61,7 @@ def main(args, config):
     if args.optuna_sampler == 'TPE':
         if verbose:
             print("Creating study with TPE sampler")
-        current_sampler = optuna.samplers.TPESampler(multivariate=(not args.optuna_TPE_univariate))
+        current_sampler = optuna.samplers.TPESampler(multivariate=args.optuna_TPE_multivariate)
     elif args.optuna_sampler == 'random':
         if verbose:
             print("Creating study with random sampler")
@@ -72,6 +72,14 @@ def main(args, config):
         current_sampler = optuna.samplers.CmaEsSampler(consider_pruned_trials = args.optuna_CMA_consider_pruned_trials, 
                                                        restart_strategy = args.optuna_CMA_restart_strategy,
                                                        inc_popsize = args.optuna_CMA_inc_popsize)
+    elif args.optuna_sampler == 'NSGAII':
+        if verbose:
+            print("Creating study with NSGAII sampler")
+        current_sampler = optuna.samplers.NSGAIISampler()
+    elif args.optuna_sampler == 'MOTPE':
+        if verbose:
+            print("Creating study with MOTPE sampler")
+        current_sampler = optuna.samplers.MOTPESampler()
 
     if normal_run:
         if verbose:
@@ -324,10 +332,10 @@ if __name__ == '__main__':
     parser.add_argument('--optuna_storage', default=None, type=str, help="An Optuna DB file")
     parser.add_argument('--optuna_study_name', default=None, type=str, help="Name of the optuna study in the Optuna DB file")
     parser.add_argument('--optuna_pruner', default='median', choices=['median', 'SHA', 'nopruner'], help="Select which pruner is used by Optuna")
-    parser.add_argument('--optuna_sampler', default='TPE', choices=['random', 'TPE', 'CMA'], help="Select which sampler is used by Optuna")
+    parser.add_argument('--optuna_sampler', default='TPE', choices=['random', 'TPE', 'CMA', 'NSGAII', 'MOTPE'], help="Select which sampler is used by Optuna")
     parser.add_argument('--optuna_warmup_steps', default=20000, type=int, help="Pruning is only considered after this amount of images has been trained on (globally, in case of data-parallel training). This warmup period is applied in each resolution phase. I.e. if optuna_warmup_steps=20000, for the first 20000 images in each resolution phase, no trial will be pruned.")
     # Optuna TPE sampler
-    parser.add_argument('--optuna_TPE_univariate', default=False, action='store_true', help="Pass this argument if you want the TPE sampler to use a univariate kernel density estimator. Otherwise, a TPE sample with multivariate kernel density estimater is constructed")
+    parser.add_argument('--optuna_TPE_multivariate', default=False, action='store_true', help="Pass this argument if you want the TPE sampler to use a multivariate kernel density estimator (WARNING: had bugs in optuna-2.3.0, https://github.com/optuna/optuna/issues/2391). Otherwise, a TPE sample with multivariate kernel density estimater is constructed")
     # Optuna CMA sampler
     parser.add_argument('--optuna_CMA_consider_pruned_trials', default=False, action='store_true', help="Whether pruned trials are considered by the sampler. It is suggested to put this flag to False when the MedianPruner is used, but to put it to True when the HyperbandPruner is used. See official Optuna documentation.")
     parser.add_argument('--optuna_CMA_restart_strategy', default=None, type=none_or_str, choices=[None, 'ipop'], help="Restarting strategy for CMA-ES optimization when converges to a local minimum. None = no restart, ipop = restart with increasing population size")
