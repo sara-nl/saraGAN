@@ -41,6 +41,8 @@ def main(args, config):
     # Normal run, no hyperparameter tuning. Do a (potentially data-parallel) convergence run
     normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and not (run_from_best_trial or hyperparam_opt_inter_trial or hyperparam_opt_intra_trial)
 
+    multi_objective = (args.optuna_sampler == 'NSGAII' or args.optuna_sampler == 'MOTPE')
+
     # Select the correct pruner based on args:
     if args.optuna_pruner == 'median':
         if verbose:
@@ -134,10 +136,15 @@ def main(args, config):
         study = None
         if hvd.rank() == 0:
             print("Storing SQlite database for optuna at %s" %storage_sqlite)
-
-            study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite, load_if_exists = True,
+            if multi_objective:
+                # We optimize on [metric, time-to-train], so we want to minimize both
+                study = optuna.create_study(directions = ["minimize", "minimize"], study_name = study_name, storage = storage_sqlite, load_if_exists = True,
                 pruner = current_pruner, sampler = current_sampler
             )
+            else:
+                study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite, load_if_exists = True,
+                    pruner = current_pruner, sampler = current_sampler
+                )
     
         # Call a barrier to make sure the study has been created before the other workers load it
         MPI.COMM_WORLD.Barrier()

@@ -1,32 +1,59 @@
 from networks.ops import *
 
+def get_filters_discriminator(filter_spec, phase_i, layer_i):
+    if phase_i >= len(filter_spec):
+        print(f"Error: no filter count specified for phase {phase_i}. Please check the file passed to --filter_spec.")
+        raise ValueError
+    if layer_i >= len(filter_spec[phase_i]):
+        print(f"Error: no filter count specified for layer {layer_i} in phase {phase_i}. Please check the file passed to --filter_spec.")
+        raise ValueError
+    # DEBUG:
+    # print(f"Returning filter_spec[{phase_i}][{layer_i}] = {filter_spec[phase_i][layer_i]}")
+    return filter_spec[phase_i][layer_i]
 
-def discriminator_block(x, filters_in, filters_out, activation, kernel_shape, param=None):
+def get_kernels_discriminator(kernel_spec, phase_i, layer_i):
+    if phase_i >= len(kernel_spec):
+        print(f"Error: no kernel shape specified for phase {phase_i}. Please check the file passed to --kernel_spec.")
+        raise ValueError
+    if layer_i >= len(kernel_spec[phase_i]):
+        print(f"Error: no kernel shape specified for layer {layer_i} in phase {phase_i}. Please check the file passed to --kernel_spec.")
+        raise ValueError
+    # DEBUG:
+    # print(f"Returning kernel_spec[{phase_i}][{layer_i}] = {kernel_spec[phase_i][layer_i]}")
+    return kernel_spec[phase_i][layer_i]
+
+def discriminator_block(x, filters_in, filters_out, activation, kernel_shape, kernel_spec, filter_spec, i, param=None):
     with tf.variable_scope('conv_1'):
-        shape = x.get_shape().as_list()[2:]
-        kernel = get_kernel(shape, kernel_shape)
-        x = conv3d(x, filters_in, kernel, activation, param=param)
+        # shape = x.get_shape().as_list()[2:]
+        # kernel = get_kernel(shape, kernel_shape)
+        kernel = get_kernels_discriminator(kernel_spec, i-1, 1)
+        # x = conv3d(x, filters_in, kernel, activation, param=param)
+        x = conv3d(x, get_filters_discriminator(filter_spec, i-1, 0), kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
     with tf.variable_scope('conv_2'):
 
-        shape = x.get_shape().as_list()[2:]
-        kernel = get_kernel(shape, kernel_shape)
-        x = conv3d(x, filters_out, kernel, activation, param=param)
+        # shape = x.get_shape().as_list()[2:]
+        # kernel = get_kernel(shape, kernel_shape)
+        kernel = get_kernels_discriminator(kernel_spec, i-1, 0)
+        # x = conv3d(x, filters_out, kernel, activation, param=param)
+        x = conv3d(x, get_filters_discriminator(filter_spec, i-2, 1), kernel, activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
     x = downscale3d(x)
     return x
 
 
-def discriminator_out(x, base_dim, latent_dim, filters_out, activation, kernel_shape, param):
+def discriminator_out(x, base_dim, latent_dim, filters_out, activation, kernel_shape, kernel_spec, filter_spec, param):
     with tf.variable_scope(f'discriminator_out'):
         # x = minibatch_stddev_layer(x)
-        shape = x.get_shape().as_list()[2:]
-        kernel = get_kernel(shape, kernel_shape)
+        # shape = x.get_shape().as_list()[2:]
+        # kernel = get_kernel(shape, kernel_shape)
+        kernel = get_kernels_discriminator(kernel_spec, 0, 1)
 #        x = conv3d(x, filters_out, kernel, activation=activation, param=param)
         # base_dim = num_filters for the first generator layer after the latent space. Discriminator should mirror that.
-        x = conv3d(x, base_dim, kernel, activation=activation, param=param)
+        # x = conv3d(x, base_dim, kernel, activation=activation, param=param)
+        x = conv3d(x, get_filters_discriminator(filter_spec, 0, 0), kernel, activation=activation, param=param)
         x = apply_bias(x)
         x = act(x, activation, param=param)
         with tf.variable_scope('dense_1'):
@@ -40,7 +67,7 @@ def discriminator_out(x, base_dim, latent_dim, filters_out, activation, kernel_s
         return x
 
 
-def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim, activation, kernel_shape, param=None, is_reuse=False, size='medium', conditioning=None):
+def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim, activation, kernel_shape, kernel_spec, filter_spec, param=None, is_reuse=False, size='medium', conditioning=None):
 
     if conditioning is not None:
         raise NotImplementedError()
@@ -54,24 +81,29 @@ def discriminator(x, alpha, phase, num_phases, base_shape, base_dim, latent_dim,
 
         with tf.variable_scope(f'from_rgb_{phase}'):
             filters_out = num_filters(phase, num_phases, base_shape, base_dim, size=size)
-            x = from_rgb(x, filters_out, activation, param=param)
+            # x = from_rgb(x, filters_out, activation, param=param)
+            # print(f"filters_out in from_rgb_{phase}: {filters_out}")
+            x = from_rgb(x, get_filters_discriminator(filter_spec, phase-1, 1), activation, param=param)
 
         for i in reversed(range(2, phase + 1)):
 
             with tf.variable_scope(f'discriminator_block_{i}'):
                 filters_in = num_filters(i, num_phases, base_shape, base_dim, size=size)
                 filters_out = num_filters(i - 1, num_phases, base_shape, base_dim, size=size)
-                x = discriminator_block(x, filters_in, filters_out, activation, kernel_shape, param=param)
+                # print(f"Phase {i} filters_in {filters_in} filters_out {filters_out}")
+                x = discriminator_block(x, filters_in, filters_out, activation, kernel_shape, kernel_spec, filter_spec, i=i, param=param)
 
             if i == phase:
                 with tf.variable_scope(f'from_rgb_{phase - 1}'):
+                    # print(f"Filters_out: {filters_out}")
                     fromrgb_prev = from_rgb(
                         downscale3d(x_downscale),
-                        filters_out, activation, param=param)
+                        #filters_out, activation, param=param)
+                        get_filters_discriminator(filter_spec, phase-2, 1), activation, param=param)
 
                 x = alpha * fromrgb_prev + (1 - alpha) * x
 
-        x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, kernel_shape, param)
+        x = discriminator_out(x, base_dim, latent_dim, filters_out, activation, kernel_shape, kernel_spec, filter_spec, param)
         return x
 
 
