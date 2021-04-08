@@ -38,7 +38,7 @@ def optuna_override_undefined(args, trial):
 
     # g_lr
     if not args.g_lr:
-        args.g_lr = trial.suggest_loguniform('generator_LR', 1e-4, 1e-1)
+        args.g_lr = trial.suggest_loguniform('generator_LR', 1e-2, 1e-1)
         if verbose:
             print(f"args.g_lr = {args.g_lr} (from: optuna trial)")
     elif verbose:
@@ -46,7 +46,7 @@ def optuna_override_undefined(args, trial):
 
     # d_lr
     if not args.d_lr:
-        args.d_lr = trial.suggest_loguniform('discriminator_LR', 1e-4, 1e-1)
+        args.d_lr = trial.suggest_loguniform('discriminator_LR', 1e-3, 5e-2)
         if verbose:
             print(f"args.d_lr = {args.d_lr} (from: optuna trial)")
     elif verbose:
@@ -143,7 +143,7 @@ def optuna_override_undefined(args, trial):
     # adam_beta1, d_adam_beta1 (if not args.d_use_different_beta1)
     d_adam_beta1_set = False
     if args.adam_beta1 is None:
-        args.adam_beta1 = trial.suggest_float("adam_beta1", 0, 1)
+        args.adam_beta1 = trial.suggest_float("adam_beta1", 0, 0.4)
         if verbose:
             print(f"args.adam_beta1 = {args.adam_beta1} (from: optuna trial)")
         # Use sampled adam_beta for discriminator
@@ -157,7 +157,7 @@ def optuna_override_undefined(args, trial):
 
     # d_adam_beta1 (if args.d_use_different_beta1)
     if args.d_adam_beta1 is None and args.d_use_different_beta1:
-        args.d_adam_beta1 = trial.suggest_float("d_adam_beta1", 0, 1)
+        args.d_adam_beta1 = trial.suggest_float("d_adam_beta1", 0, 0.4)
         if verbose:
             print(f"args.d_adam_beta1 = {args.d_adam_beta1} (from: optuna trial)")
     elif verbose and not d_adam_beta1_set: # Check that args.d_adam_beta1 wasn't set yet to the same value as args.adam_beta1 - if so, it shouldn't print here
@@ -166,7 +166,7 @@ def optuna_override_undefined(args, trial):
     # adam_beta2, d_adam_beta2 (if not args.d_use_different_beta2)
     d_adam_beta2_set = False
     if args.adam_beta2 is None:
-        args.adam_beta2 = trial.suggest_float("adam_beta2", 0, 1)
+        args.adam_beta2 = trial.suggest_float("adam_beta2", 0.75, 1)
         if verbose:
             print(f"args.adam_beta2 = {args.adam_beta2} (from: optuna trial)")
         # Use sampled adam_beta for discriminator
@@ -180,7 +180,7 @@ def optuna_override_undefined(args, trial):
 
     # d_adam_beta2 (if args.d_use_different_beta2)
     if args.d_adam_beta2 is None and args.d_use_different_beta2:
-        args.d_adam_beta2 = trial.suggest_float("d_adam_beta2", 0, 1)
+        args.d_adam_beta2 = trial.suggest_float("d_adam_beta2", 0.75, 1)
         if verbose:
             print(f"args.d_adam_beta2 = {args.d_adam_beta2} (from: optuna trial)")
     elif verbose and not d_adam_beta2_set: # Check that args.d_adam_beta2 wasn't set yet to the same value as args.adam_beta2 - if so, it shouldn't print here
@@ -242,6 +242,30 @@ def optuna_override_undefined(args, trial):
             if verbose:
                 print(f"args.conv_kernel_size[{i}] = {args.conv_kernel_size[i]} (from: command line argument)")
 
-        
+    # filter_spec
+    max_filter_counts = [9, 8, 7, 7, 6, 5, 4] # corresponds to filter counts of [512, 256, 128, 128, 64, 32, 16]
+    for phase_i in range(0, len(args.filter_spec)):
+        for conv_j in range(0, len(args.filter_spec[phase_i])):
+                if args.filter_spec[phase_i][conv_j] is None or args.filter_spec[phase_i][conv_j] == "None":
+                    # Suggest some power of two as number of filters
+                    args.filter_spec[phase_i][conv_j] = 2 ** trial.suggest_int(f"Filter_count_exponent_{phase_i}_{conv_j}", 1, max_filter_counts[phase_i])
+                    if verbose:
+                        print(f"args.filter_spec[{phase_i}][{conv_j}] = {args.filter_spec[phase_i][conv_j]} (from: optuna trial)")
+                else:
+                    if verbose:
+                        print(f"args.filter_spec[{phase_i}][{conv_j}] = {args.filter_spec[phase_i][conv_j]} (from: command line argument)")
+
+    # kernel_spec
+    for phase_i in range(0, len(args.kernel_spec)):
+        for conv_j in range(0, len(args.kernel_spec[phase_i])):
+            for kernel_k in range(0, len(args.kernel_spec[phase_i][conv_j])):
+                if args.kernel_spec[phase_i][conv_j][kernel_k] is None or args.kernel_spec[phase_i][conv_j][kernel_k] == "None":
+                    # Suggest some odd number as kernel size
+                    args.kernel_spec[phase_i][conv_j][kernel_k] = trial.suggest_int(f"Kernel_size_{phase_i}_{conv_j}_{kernel_k}", 1, 9, 2)
+                    if verbose:
+                        print(f"args.kernel_spec[{phase_i}][{conv_j}][{kernel_k}] = {args.kernel_spec[phase_i][conv_j][kernel_k]} (from: optuna trial)")
+                else:
+                    if verbose:
+                        print(f"args.kernel_spec[{phase_i}][{conv_j}][{kernel_k}] = {args.kernel_spec[phase_i][conv_j][kernel_k]} (from: command line argument)")
         
     return args
