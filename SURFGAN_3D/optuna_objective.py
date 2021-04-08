@@ -6,6 +6,7 @@ import time
 import random
 import logging
 import copy
+import pdb
 
 import os
 import importlib
@@ -16,6 +17,7 @@ from mpi4py import MPI
 from utils import count_parameters, parse_tuple, MPMap, log0
 from utils import get_compute_metrics_dict, get_logdir, get_verbosity, get_filewriter, get_base_shape, get_num_phases, get_num_channels
 from utils import get_num_metric_samples, scale_lr, get_xy_dim, get_numpy_dataset, get_current_input_shape, restore_variables, print_summary_to_stdout
+from utils import dump_weight_for_debugging
 import dataset as data
 from optuna_suggestions import optuna_override_undefined
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
@@ -29,11 +31,15 @@ import summary
 
 def optuna_objective(trial, args, config):
 
+    start_train = time.time()
+
     # We support several types of runs (see main.py)
     run_from_best_trial = (args.optuna_use_best_trial and (args.optuna_storage is not None))
     hyperparam_opt_inter_trial = args.optuna_distributed and not run_from_best_trial
     hyperparam_opt_intra_trial = (args.optuna_storage is not None) and (args.optuna_study_name is not None) and not (run_from_best_trial or hyperparam_opt_inter_trial)
     normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and not (run_from_best_trial or hyperparam_opt_inter_trial or hyperparam_opt_intra_trial)
+
+    multi_objective = (args.optuna_sampler == 'NSGAII' or args.optuna_sampler == 'MOTPE')
 
     # Store the last fid so that it can be returned to optuna
     last_fid = None
@@ -183,9 +189,16 @@ def optuna_objective(trial, args, config):
         assign_starting_alpha = alpha.assign(args.starting_alpha)
         assign_zero = alpha.assign(0)
 
+        # prev_vars defines which variables should have their weights be restored from the previous phase (by restore_variables)
+        # That way, only the newly added layers will have randomly initialized weights
+        prev_vars = var_list # Store variables from the previous iteration. Those, we'll want to freeze during the mixing phase
+
         # Performs a forward pass, computes gradients, clips them (if desired), and then applies them.
         # Supports simultaneous forward pass of generator and discriminator, or alternatingly (discriminator first)
-        train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm = opt.optimize_step(
+        train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, \
+            d_gradients, d_variables, max_g_norm, max_d_norm, \
+            train_gen_freeze, g_gradients_freeze, g_variables_freeze, max_g_norm_freeze, \
+            train_disc_freeze, d_gradients_freeze, d_variables_freeze, max_d_norm_freeze = opt.optimize_step(
             optimizer_gen,
             optimizer_disc,
             generator,
@@ -207,8 +220,11 @@ def optuna_objective(trial, args, config):
             args.optim_strategy,
             args.g_clipping,
             args.d_clipping,
-            args.noise_stddev
+            args.noise_stddev,
+            prev_vars
         )
+
+
 
         if verbose:
             print(f"Generator parameters: {count_parameters('generator')}")
@@ -217,8 +233,39 @@ def optuna_objective(trial, args, config):
         # Create an exponential moving average of generator weights. We update this every step.
         gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
-        all_vars = gen_vars + disc_vars
-        ema = ExtendedEMA(var_list = all_vars, decay=args.ema_beta)
+        # Full list of current variables, used to e.g. create the EMA, or restore from a checkpoint
+        var_list = gen_vars + disc_vars
+        # Only new variables. We can pass new_vars to the optimizer during mixing phase to keep all weights in prev_vars frozen
+        # new_vars = [var for var in var_list if var.name not in [x.name for x in prev_vars]]
+
+        # Create optimize ops that keep the weights from previous phases frozen
+        # train_gen_freeze, train_disc_freeze, gen_loss_freeze, disc_loss_freeze, gp_loss_freeze, gen_sample_freeze, g_gradients_freeze, g_variables_freeze, d_gradients_freeze, d_variables_freeze, max_g_norm_freeze, max_d_norm = opt.optimize_step(
+        #     optimizer_gen,
+        #     optimizer_disc,
+        #     generator,
+        #     discriminator,
+        #     real_image_input,
+        #     args.latent_dim,
+        #     alpha,
+        #     phase,
+        #     get_num_phases(args.start_shape, args.final_shape),
+        #     base_dim,
+        #     get_base_shape(args.start_shape),
+        #     args.conv_kernel_size,
+        #     args.kernel_spec, args.filter_spec,
+        #     args.activation,
+        #     args.leakiness,
+        #     args.network_size,
+        #     args.loss_fn,
+        #     args.gp_weight,
+        #     args.optim_strategy,
+        #     args.g_clipping,
+        #     args.d_clipping,
+        #     args.noise_stddev,
+        #     new_vars
+        # )
+
+        ema = ExtendedEMA(var_list = var_list, decay=args.ema_beta)
         ema_op = ema.apply()
         assign_ema_weights = ema.assign_ema_weights()
         restore_original_weights = ema.restore_original_weights()
@@ -227,16 +274,34 @@ def optuna_objective(trial, args, config):
         # ema_op = ema.apply(all_vars)
         # After training has completed, we copy the EMA weights to the generator AND discriminator using the following op (before saving the generator model).
         ema_update_weights = tf.group(
-            [tf.assign(var, ema.average(var)) for var in all_vars])
+            [tf.assign(var, ema.average(var)) for var in var_list])
 
         # ------------------------------------------------------------------------------------------#
         # Summaries
         summary_training_props = summary.create_training_props_summary(alpha, g_lr, d_lr)
 
-        summary_small_with_gradients = summary.create_small_summary_with_gradients(
+        # summary_small_with_gradients = summary.create_small_summary_with_gradients(
+        #     disc_loss, gen_loss, gp_loss, 
+        #     g_gradients, g_variables, d_gradients, d_variables,
+        #     max_g_norm, max_d_norm, gen_sample, real_image_input)
+
+        # # Add summary_small_with_gradients based on gradients with frozen variables
+        # summary_small_with_gradients_freeze = summary.create_small_summary_with_gradients(
+        #     disc_loss, gen_loss, gp_loss, 
+        #     g_gradients_freeze, g_variables_freeze, d_gradients_freeze, d_variables_freeze,
+        #     max_g_norm, max_d_norm, gen_sample, real_image_input)
+
+        # One op to store gradient summaries when weights are not frozen, and one to store gradients when they are frozen.
+        # Note that since the gradients will be a different (more limited) subset when weights are frozen, their summaries will be stored in different summary scalars.
+        summary_gradients_nofreeze = summary.create_gradients_summary(
+            g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm)
+        summary_gradients_freeze = summary.create_gradients_summary(
+            g_gradients_freeze, g_variables_freeze, d_gradients_freeze, d_variables_freeze, max_g_norm_freeze, max_d_norm_freeze, suffix='_freeze')
+
+        # Summary parameter op for the training set
+        summary_small_training = summary.create_small_summary(
             disc_loss, gen_loss, gp_loss, 
-            g_gradients, g_variables, d_gradients, d_variables,
-            max_g_norm, max_d_norm, gen_sample, real_image_input)
+            gen_sample, real_image_input)
 
         # Summary parameters will get the *_val suffix. Intended to be computed on the validation dataset
         summary_small_validation = summary.create_small_summary(
@@ -263,30 +328,30 @@ def optuna_objective(trial, args, config):
             #     assert tf.test.is_gpu_available(cuda_only=False, min_cuda_compute_capability=None)
             # sess.graph.finalize()
             sess.run(init_op)
-            
+
+            # Initialize the EMA averages. (the restore_variables will not restore these if they haven't been initialized)
+            sess.run(ema_op)
+
             # Do variables need to be restored? (either from the previous phase, or from a previous run)
             if (phase > args.starting_phase):
                 if verbose:
                     print(f"We are in phase {phase}, restoring variables from phase {phase-1}")
-                restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, var_list, verbose, ema)
+                restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, prev_vars, verbose, ema)
             elif (args.continue_path and phase == args.starting_phase):
                 if verbose:
                     print(f"We are starting in phase {phase}, restoring variables from {args.continue_path}")
                 # If the checkpoint file contains variables for all layers in the current phase. Typically this means we are continueing training in the middle of a phase
                 try:
-                    restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, all_vars, verbose, ema)
+                    restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, var_list, verbose, ema)
                 # If the try failed, apparently not all layers are present in the current checkpoint file. Typically this means we are continueing with a new phase, 
                 # based on the checkpoint saved at the end of the previous phase.
                 except:
-                    restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, var_list, verbose, ema)                
+                    restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, prev_vars, verbose, ema)                
             else:
                 if verbose:
                     print("Not restoring variables.")
                     writer.add_graph(sess.graph)
 
-            # Store the variable list in this phase. This is the list that needs to be loaded in the next phase.
-            # That way, only the newly added layers will have randomly initialized weights, while the other layers will get their weights set by the restore_variables function.
-            var_list = gen_vars + disc_vars
 
             # If we haven't reached the starting phase, simply continue with the next loop iterations
             if phase < args.starting_phase:
@@ -311,10 +376,11 @@ def optuna_objective(trial, args, config):
 
             if trial is not None:
                 # Only for inter-trial parallelism: each worker has its own trial, so should report its own parameters. Otherwise, only rank 0 should report
+                current_time = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
                 if hyperparam_opt_inter_trial:
-                    print(f"Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}")
+                    print(f"{current_time} Trial: {trial.number}, Worker: {hvd.rank()}, Parameters: {trial.params}")
                 elif hvd.rank() == 0:
-                    print(f"Trial: {trial.number}, Parameters: {trial.params}")
+                    print(f"{current_time} Trial: {trial.number}, Parameters: {trial.params}")
 
             # ------------------------------------------------------------------------------------------#
             # Training loop for mixing phase
@@ -372,20 +438,32 @@ def optuna_objective(trial, args, config):
                 metrics_summary_bool = (local_step % args.metrics_every_nsteps < batch_size)
 
                 # Run training step, including summaries
+                if mixing_bool:
+                    summary_gradients = summary_gradients_nofreeze
+                    train_g = train_gen_freeze
+                    train_d = train_disc_freeze
+                else:
+                    summary_gradients = summary_gradients_freeze
+                    train_g = train_gen
+                    train_d = train_disc
                 if large_summary_bool:
-                    _, _, summary_props, summary_s, summary_l, d_loss, g_loss = sess.run(
-                         [train_gen, train_disc, summary_training_props, summary_small_with_gradients, summary_large,
+                    _, _, summary_props, summary_s, summary_l, summary_grad, d_loss, g_loss = sess.run(
+                         [train_g, train_d, summary_training_props, summary_small_training, summary_large, summary_gradients,
                           disc_loss, gen_loss], feed_dict={real_image_input: batch})
                 elif small_summary_bool:
-                    _, _, summary_props, summary_s, d_loss, g_loss = sess.run(
-                         [train_gen, train_disc, summary_training_props, summary_small_with_gradients,
+                    _, _, summary_props, summary_s, summary_grad, d_loss, g_loss = sess.run(
+                         [train_g, train_d, summary_training_props, summary_small_training, summary_gradients,
                           disc_loss, gen_loss], feed_dict={real_image_input: batch})
                 else:
                     _, _, d_loss, g_loss = sess.run(
-                         [train_gen, train_disc, disc_loss, gen_loss],
+                         [train_g, train_d, disc_loss, gen_loss],
                          feed_dict={real_image_input: batch})
                 # Update EMA right after training step
                 sess.run(ema_op)
+
+                # DEBUG:
+                dump_weight_for_debugging(sess)
+                dump_weight_for_debugging(sess, 'discriminator/discriminator_block_2/conv_2/weight:0')
 
                 # Run validation loss
                 if large_summary_bool or small_summary_bool:
@@ -434,8 +512,10 @@ def optuna_objective(trial, args, config):
                         
                         # If we use intra-trial parallelism, only worker 0 should report and prune, the others should 'just' return. For inter-trial parallelism, each workers should report an prune.
                         if hyperparam_opt_inter_trial or (hyperparam_opt_intra_trial and (hvd.rank() == 0)):
-                            trial.report(metrics['FID'], global_step)
-                            should_prune = trial.should_prune()
+                            should_prune = False
+                            if not multi_objective: # not implemented for multi_objective, see 
+                                trial.report(metrics['FID'], global_step)
+                                should_prune = trial.should_prune()
                             if (args.horovod and (hvd.rank() == 0)):
                                 print("Sending signal to other horovod workers that trial has been pruned and they should return")
                                 MPI.COMM_WORLD.bcast(should_prune, root = 0)
@@ -448,7 +528,12 @@ def optuna_objective(trial, args, config):
                             # Disable pruning for the first args.optuna_warmup_steps of each resolution phase
                             if should_prune and (in_phase_step > args.optuna_warmup_steps):
                                 print(f"Received signal from rank 0 that trial {trial.number} should be pruned. Returning...")
-                                return last_fid
+                                if multi_objective:
+                                    end_train = time.time()
+                                    train_time = (end_train - start_train)
+                                    return last_fid, train_time
+                                else:
+                                    return last_fid
 
                 if verbose:
                     if large_summary_bool:
@@ -463,6 +548,7 @@ def optuna_objective(trial, args, config):
                         writer.add_summary(summary_s, global_step)
                         writer.add_summary(summary_s_val, global_step)
                         writer.add_summary(summary_s_val_ema, global_step)
+                        writer.add_summary(summary_grad, global_step)
                     if speed_measurement_bool:
                         writer.add_summary(tf.Summary(value=[tf.Summary.Value(tag='img_s', simple_value=img_s)]),
                                            global_step)
@@ -488,10 +574,15 @@ def optuna_objective(trial, args, config):
             if verbose:
                 print("\n\n\n End of phase.")
 
+            # If args.optuna_distributed, each rank should write a model checkpoint
+            if verbose or args.optuna_distributed:
                 # Save Session. First, update the generator with the weights stored in the expontial moving average, then store it.
                 sess.run(ema_update_weights)
                 saver = tf.train.Saver(var_list)
-                print("Writing final checkpoint file: model_{phase}")
+                if args.optuna_distributed:
+                    print(f"Worker: {hvd.rank()}. Writing final checkpoint file: model_{phase}")
+                else:
+                    print(f"Writing final checkpoint file: model_{phase}")
                 saver.save(sess, os.path.join(logdir, f'model_{phase}'))
 
             # if hyperparam_opt_inter_trial or (hvd.rank() == 0):
@@ -518,7 +609,10 @@ def optuna_objective(trial, args, config):
                     print("Validation dataset metrics:")
                     print(metrics_val)
                 # Overwrite the last fid
-                last_fid = metrics_val['FID']
+                if args.compute_FID:
+                    last_fid = metrics_val['FID']
+                else:
+                    last_fid = None
             if args.compute_metrics_train:
                 start_metrics_train = time.time()
                 metrics_train = save_metrics(None, sess, npy_data_train, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_train), args.data_mean, args.data_stddev, verbose)
@@ -541,5 +635,9 @@ def optuna_objective(trial, args, config):
                 if phase == args.ending_phase:
                     print("Reached final phase, breaking.")
                     break
-
-    return last_fid
+    if multi_objective:
+        end_train = time.time()
+        train_time = (end_train - start_train)
+        return last_fid, train_time
+    else:
+        return last_fid

@@ -75,7 +75,7 @@ def minimize_with_clipping(optimizer, loss, var_list, clipping):
     return train_op, gradients, variables, max_norm
 
 def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_image_input, latent_dim, alpha, phase,
-    num_phases, base_dim, base_shape, kernel_shape, activation, leakiness, network_size, loss_fn, gp_weight, optim_strategy, g_clipping, d_clipping, noise_stddev):
+    num_phases, base_dim, base_shape, kernel_shape, kernel_spec, filter_spec, activation, leakiness, network_size, loss_fn, gp_weight, optim_strategy, g_clipping, d_clipping, noise_stddev, freeze_vars=None):
     """Defines the op for a single optimization step.
     Parameters:
         optimizer_gen:
@@ -99,8 +99,9 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         g_clipping:
         d_clipping:
         noise_stddev:
+        freeze_vars: list of variables that will not be updated when the train_gen_freeze or train_disc_freese ops are called. Typically, this is the list of variables from previous phases
     Returns:
-        train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables
+        train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm, train_gen_freeze, g_gradients_freeze, g_variables_freeze, max_g_norm_freeze, train_disc_freeze, d_gradients_freeze, d_variables_freeze, max_d_norm_freeze
         train_gen: generator training op
         train_disc: discriminator training op
         gen_loss: generator loss
@@ -111,6 +112,16 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         g_variables: generator variables (names)
         d_gradients: discriminator gradients
         d_variables: discriminator variables (names)
+        max_g_norm:
+        max_d_norm:
+        train_gen_freeze: generator training op where freeze_vars are not updated (returns None if freeze_vars is undefined)
+        g_gradients_freeze: generator gradients for non-frozen variables (returns None if freeze_vars is undefined)
+        g_variables_freeze: generator variables
+        max_g_norm_freeze:
+        train_disc_freeze:
+        d_gradients_freeze:
+        d_variables_freeze:
+        max_d_norm_freeze:
     """
 
     # Perform forward steps of discriminator and generator simultaneously
@@ -126,6 +137,7 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             base_dim,
             base_shape,
             kernel_shape,
+            kernel_spec, filter_spec,
             activation,
             leakiness,
             network_size,
@@ -137,8 +149,22 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
         train_gen, g_gradients, g_variables, max_g_norm = minimize_with_clipping(optimizer_gen, gen_loss, gen_vars, g_clipping)
 
+        gen_vars_limited = None; train_gen_feeze = None; g_gradients_freeze = None; g_variables_freeze = None; max_g_norm_freeze = None
+        if freeze_vars is not None:
+            gen_vars_limited = [var for var in gen_vars if var.name not in [x.name for x in freeze_vars]]
+            print(f'gen_vars_limited: {gen_vars_limited}')
+            train_gen_freeze, g_gradients_freeze, g_variables_freeze, max_g_norm_freeze = minimize_with_clipping(optimizer_gen, gen_loss, gen_vars_limited, g_clipping)
+        
+
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
         train_disc, d_gradients, d_variables, max_d_norm = minimize_with_clipping(optimizer_disc, disc_loss, disc_vars, d_clipping)
+
+        disc_vars_limited = None; train_disc_freeze = None; d_gradients_freeze = None; d_variables_freeze = None; max_d_norm_freeze = None
+        if freeze_vars is not None:
+            disc_vars_limited = [var for var in disc_vars if var.name not in [x.name for x in freeze_vars]]
+            print(f'disc_vars_limited: {disc_vars_limited}')
+            train_disc_freeze, d_gradients_freeze, d_variables_freeze, max_d_norm_freeze = minimize_with_clipping(optimizer_disc, disc_loss, disc_vars_limited, d_clipping)
+        
 
     # Perform forward steps of discriminator and generator alternatingly
     elif optim_strategy == 'alternate':
@@ -154,6 +180,7 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             base_dim,
             base_shape,
             kernel_shape,
+            kernel_spec, filter_spec,
             activation,
             leakiness,
             network_size,
@@ -165,6 +192,11 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
 
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
         train_disc, d_gradients, d_variables, max_d_norm = minimize_with_clipping(optimizer_disc, disc_loss, disc_vars, d_clipping)
+        
+        if freeze_vars is not None:
+            disc_vars_limited = [var for var in disc_vars if var.name not in [x.name for x in freeze_vars]]
+            print('disc_vars_limited: {disc_vars_limited}')
+            train_disc_freeze, d_gradients_freeze, d_variables_freeze, max_d_norm_freeze = minimize_with_clipping(optimizer_disc, disc_loss, disc_vars_limited, d_clipping)
 
         with tf.control_dependencies([train_disc]):
             gen_sample, gen_loss = forward_generator(
@@ -178,6 +210,7 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
                 base_dim,
                 base_shape,
                 kernel_shape,
+                kernel_spec, filter_spec,
                 activation,
                 leakiness,
                 network_size,
@@ -189,10 +222,18 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
             train_gen, g_gradients, g_variables, max_g_norm = minimize_with_clipping(optimizer_gen, gen_loss, gen_vars, g_clipping)
 
+            if freeze_vars is not None:
+                gen_vars_limited = [var for var in gen_vars if var.name not in [x.name for x in freeze_vars]]
+                print('gen_vars_limited: {gen_vars_limited}')
+                train_gen_freeze, g_gradients_freeze, g_variables_freeze, max_g_norm_freeze = minimize_with_clipping(optimizer_gen, gen_loss, gen_vars_limited, g_clipping)
+
     else:
         raise ValueError("Unknown optim strategy ", optim_strategy)
 
-    return train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm
+    return train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, \
+        d_gradients, d_variables, max_g_norm, max_d_norm, \
+        train_gen_freeze, g_gradients_freeze, g_variables_freeze, max_g_norm_freeze, \
+        train_disc_freeze, d_gradients_freeze, d_variables_freeze, max_d_norm_freeze
 
     # Op to update the learning rate according to a schedule
 def lr_update(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_decrease, lr_rise_niter, lr_decay_niter):
