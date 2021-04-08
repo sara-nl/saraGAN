@@ -24,16 +24,25 @@ def print_study_summary(study):
     for key, value in trial.params.items():
         print("    {}: {}".format(key, value))
         
-def dump_weight_for_debugging(sess):
-    """Dumps the first weight from the dense layer. Can be used for debugging, e.g. to see how it develops, or if it gets loaded correctly from a checkpoint.
+def dump_weight_for_debugging(sess, name="generator/generator_in/dense/weight:0"):
+    """Dumps the first weight from layer with name 'name'. Can be used for debugging, e.g. to see how it develops, or if it gets loaded correctly from a checkpoint.
     Parameters:
         sess: a tf.Session that can be used to evaluate the dense layer
     Returns:
         None (weight gets printed)
     """
     # DEBUG, allows querying a single weight, to see how it develops:
-    var = [v for v in tf.trainable_variables() if v.name == "generator/generator_in/dense/weight:0"][0]
-    print(f"generator/generator_in/dense/weight:0: {sess.run(var)[0, 0]}")
+    var = [v for v in tf.trainable_variables() if v.name == name]
+    if len(var) > 0:
+        var = var[0]
+        variable = sess.run(var)
+        while len(variable.shape) > 0:
+            variable = variable[0]
+            name = f'{name}[0]'
+            # print(f"{name}: {variable.shape}")
+        print(f"{name}: {variable}")
+    else:
+        print(f"{name} is not in tf.trainable_variables()")
 
 
 def print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha):
@@ -96,8 +105,13 @@ def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_li
 
     if ema is not None:
         # Op for restoring an ema based on the restored variables in a checkpoint
-        # Note that ema.average(var) is None at the beginning of a phase. In that case, don't restore - it doesn't make sense anyway, the ema should start 'fresh' at the start of a phase
-        restore_ema = tf.group([tf.assign(ema.average(var), var) for var in var_list if ema.average(var) is not None])
+        # Note that ema.average(var) will return None if it is based on the var_list, since those were the tf.Variables from the previous phase - and the ema does not contain shadow variables for those anymore.
+        # Thus, we need to get all of the current variables first:
+        gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+        disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
+        all_vars = gen_vars + disc_vars
+        # Then, we simply set all tf.Variables that represent the ema averages (i.e. ema.average(var) equal to the current value (var)
+        restore_ema = tf.group([tf.assign(ema.average(var), var) for var in all_vars if ema.average(var) is not None])
         sess.run(restore_ema)
 
     if verbose:
