@@ -50,11 +50,15 @@ def main(args, config):
         while fake_batch.shape[0] < args.num_samples:
             fake_batch = np.concatenate((fake_batch, sess.run(gen_sample).astype(np.float32)))
 
+        print(f'Minimum of generated image 1 before inverting normalization: {np.min(fake_batch[0,...])}')
+        print(f'Maximum of generated image 1 before inverting normalization: {np.max(fake_batch[0,...])}')
+
         fake_batch = data.invert_normalize_numpy(fake_batch, args.data_mean, args.data_stddev, True)
 
-        print(f"fake_batch.shape = {fake_batch.shape}")
+        print(f'Minimum of generated image 1 after inverting normalization: {np.min(fake_batch[0,...])}')
+        print(f'Maximum of generated image 1 after inverting normalization: {np.max(fake_batch[0,...])}')
 
-        np.save(os.path.join(logdir, 'fake_images.npy'), fake_batch)
+        np.save(os.path.join(logdir, f'fake_images_{phase}.npy'), fake_batch)
 
 def kernel_spec(value):
     with open(value) as json_file:
