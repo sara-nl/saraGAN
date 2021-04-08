@@ -75,7 +75,7 @@ def minimize_with_clipping(optimizer, loss, var_list, clipping):
     return train_op, gradients, variables, max_norm
 
 def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_image_input, latent_dim, alpha, phase,
-    num_phases, base_dim, base_shape, kernel_shape, kernel_spec, filter_spec, activation, leakiness, network_size, loss_fn, gp_weight, optim_strategy, g_clipping, d_clipping, noise_stddev, freeze_vars=None):
+    base_shape, kernel_spec, filter_spec, activation, leakiness, loss_fn, gp_weight, optim_strategy, g_clipping, d_clipping, noise_stddev, freeze_vars=None):
     """Defines the op for a single optimization step.
     Parameters:
         optimizer_gen:
@@ -133,14 +133,10 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             latent_dim,
             alpha,
             phase,
-            num_phases,
-            base_dim,
             base_shape,
-            kernel_shape,
             kernel_spec, filter_spec,
             activation,
             leakiness,
-            network_size,
             loss_fn,
             gp_weight,
             noise_stddev
@@ -176,14 +172,10 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             latent_dim,
             alpha,
             phase,
-            num_phases,
-            base_dim,
             base_shape,
-            kernel_shape,
             kernel_spec, filter_spec,
             activation,
             leakiness,
-            network_size,
             loss_fn,
             gp_weight,
             noise_stddev,
@@ -206,14 +198,10 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
                 latent_dim,
                 alpha,
                 phase,
-                num_phases,
-                base_dim,
                 base_shape,
-                kernel_shape,
                 kernel_spec, filter_spec,
                 activation,
                 leakiness,
-                network_size,
                 loss_fn,
                 noise_stddev,
                 is_reuse=True
