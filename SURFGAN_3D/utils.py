@@ -24,16 +24,25 @@ def print_study_summary(study):
     for key, value in trial.params.items():
         print("    {}: {}".format(key, value))
         
-def dump_weight_for_debugging(sess):
-    """Dumps the first weight from the dense layer. Can be used for debugging, e.g. to see how it develops, or if it gets loaded correctly from a checkpoint.
+def dump_weight_for_debugging(sess, name="generator/generator_in/dense/weight:0"):
+    """Dumps the first weight from layer with name 'name'. Can be used for debugging, e.g. to see how it develops, or if it gets loaded correctly from a checkpoint.
     Parameters:
         sess: a tf.Session that can be used to evaluate the dense layer
     Returns:
         None (weight gets printed)
     """
     # DEBUG, allows querying a single weight, to see how it develops:
-    var = [v for v in tf.trainable_variables() if v.name == "generator/generator_in/dense/weight:0"][0]
-    print(f"generator/generator_in/dense/weight:0: {sess.run(var)[0, 0]}")
+    var = [v for v in tf.trainable_variables() if v.name == name]
+    if len(var) > 0:
+        var = var[0]
+        variable = sess.run(var)
+        while len(variable.shape) > 0:
+            variable = variable[0]
+            name = f'{name}[0]'
+            # print(f"{name}: {variable.shape}")
+        print(f"{name}: {variable}")
+    else:
+        print(f"{name} is not in tf.trainable_variables()")
 
 
 def print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_loss, g_loss, d_lr_val, g_lr_val, alpha):
@@ -63,7 +72,7 @@ def print_summary_to_stdout(global_step, in_phase_step, img_s, local_img_s, d_lo
             # f"memory {memory_percentage:.4f} % \t"
             f"alpha {alpha.eval():.2f}")
 
-def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_list, verbose):
+def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_list, verbose, ema=None):
     """Restores variables either from a previous checkpoint, or from the previous phase.
     Parameters:
         sess: tf.session to restore the variables with
@@ -72,6 +81,7 @@ def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_li
         logdir: current logging directory, where checkpoints per phase are stored.
         continue_path: path to a model checkpoint. If the phase is the starting phase, this model checkpoint is used to restore variables
         verbose: should output be printed
+        exponential moving average: a tf.train.exponential_moving_average object to which the variables should also be restored
     Returns:
         None
     """
@@ -85,9 +95,25 @@ def restore_variables(sess, phase, starting_phase, logdir, continue_path, var_li
     var_names = [v.name for v in var_list]
     trainable_variable_names = [v.name for v in tf.trainable_variables()]
     load_vars = [sess.graph.get_tensor_by_name(n) for n in var_names if n in trainable_variable_names]
-    print(f"load_vars: {load_vars}")
+    not_loaded_vars = [sess.graph.get_tensor_by_name(n) for n in trainable_variable_names if n not in var_names]
+    if verbose:
+        print(f"INFO: Restoring trainable variables: {load_vars}")
+        if len(not_loaded_vars) > 0:
+            print(f"INFO: The following trainable variables will not be restored (generally because you are restoring from a checkpoint from the previous phase): {not_loaded_vars}")
     saver = tf.train.Saver(load_vars)
     saver.restore(sess, restore_path)
+
+    if ema is not None:
+        # Op for restoring an ema based on the restored variables in a checkpoint
+        # Note that ema.average(var) will return None if it is based on the var_list, since those were the tf.Variables from the previous phase - and the ema does not contain shadow variables for those anymore.
+        # Thus, we need to get all of the current variables first:
+        gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
+        disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
+        all_vars = gen_vars + disc_vars
+        # Then, we simply set all tf.Variables that represent the ema averages (i.e. ema.average(var) equal to the current value (var)
+        restore_ema = tf.group([tf.assign(ema.average(var), var) for var in all_vars if ema.average(var) is not None])
+        sess.run(restore_ema)
+
     if verbose:
         print("Variables restored!")
 
@@ -212,6 +238,11 @@ def get_logdir(args):
     else:
         timestamp = time.strftime("%Y-%m-%d_%H:%M:%S", time.gmtime())
         logdir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'runs', args.architecture, timestamp)
+
+    # If running optuna_distributed, each MPI rank is running it's own training run and the checkpoints should be seperated
+    # Thus, append the rank to the logdir to ensure this
+    if args.optuna_distributed:
+        logdir = os.path.join(logdir, str(hvd.rank()))
 
     if get_verbosity(args.horovod, args.optuna_distributed):
         print(f"Saving files to {logdir}")

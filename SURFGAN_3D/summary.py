@@ -55,7 +55,7 @@ def create_small_summary(disc_loss, gen_loss, gp_loss, gen_sample, real_image_in
 
     return summary_small
 
-def create_small_summary_with_gradients(disc_loss, gen_loss, gp_loss, g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm, gen_sample, real_image_input, suffix=''):
+def create_gradients_summary(g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm, suffix=''):
     """Creates a summary op for small summaries, i.e. the ones that don't consume much disk space. These can be made frequently.
     Parameters:
         disc_loss: discriminator loss
@@ -78,10 +78,6 @@ def create_small_summary_with_gradients(disc_loss, gen_loss, gp_loss, g_gradient
 
     with tf.name_scope('Loss/'):
 
-        summary_small.append(tf.summary.scalar('d_loss' + suffix, disc_loss))
-        summary_small.append(tf.summary.scalar('g_loss' + suffix, gen_loss))
-        summary_small.append(tf.summary.scalar('gp' + suffix, tf.reduce_mean(gp_loss)))
-
         for g in zip(g_gradients, g_variables):
             summary_small.append(tf.summary.histogram(f'grad_{g[1].name}' + suffix, g[0]))
         for g in zip(d_gradients, d_variables):
@@ -89,13 +85,6 @@ def create_small_summary_with_gradients(disc_loss, gen_loss, gp_loss, g_gradient
 
         summary_small.append(tf.summary.scalar('max_g_grad_norm' + suffix, max_g_norm))
         summary_small.append(tf.summary.scalar('max_d_grad_norm' + suffix, max_d_norm))
-
-    with tf.name_scope('Image_properties/'):
-        summary_small.append(tf.summary.scalar('image_min_fake' + suffix, tf.math.reduce_min(gen_sample)))
-        summary_small.append(tf.summary.scalar('image_max_fake' + suffix, tf.math.reduce_max(gen_sample)))
-
-        summary_small.append(tf.summary.scalar('image_min_real' + suffix, tf.math.reduce_min(real_image_input[0])))
-        summary_small.append(tf.summary.scalar('image_max_real' + suffix, tf.math.reduce_max(real_image_input[0])))
 
     summary_small = tf.summary.merge(summary_small)
 

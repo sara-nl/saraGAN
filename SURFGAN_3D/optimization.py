@@ -3,6 +3,46 @@ import numpy as np
 
 from networks.loss import forward_simultaneous, forward_generator, forward_discriminator
 
+def get_optimizer(d_lr, g_lr, args):
+    """Check args.optimizer and return a tf.Optimizer object. The tf.Optimizer is initialized with parameters from args.
+    Parameters:
+        d_lr: A tf.Variable representing the discriminator learning rate. We use a tf.Variable, and not args.d_lr directly since this allows adaptation of the learning rate during training.
+        g_lr: A tf.Variable representing the generator learning rate.
+        args: the parsed command line arguments.
+    Returns: optimizer_gen, optimizer_disc, a tuple with optimizers for the generator and discriminator, respectively (tf.Optimizer, tf.Optimizer)"""
+
+    # Create the right optimizer
+    if args.optimizer == 'Adam':
+        optimizer_gen = tf.train.AdamOptimizer(learning_rate=g_lr, beta1=args.adam_beta1, beta2=args.adam_beta2)
+    elif args.optimizer == 'SGD':
+        optimizer_gen = tf.train.GradientDescentOptimizer(learning_rate=g_lr)
+    elif args.optimizer == 'Adadelta':
+        optimizer_gen = tf.train.AdadeltaOptimizer(learning_rate=g_lr, rho=args.rho, epsilon=1e-07)
+    elif args.optimizer == 'Momentum':
+        optimizer_gen = tf.train.MomentumOptimizer(learning_rate = g_lr, momentum = args.momentum, use_nesterov = True)
+    else:
+        print(f"ERROR: optimizer argument {args.optimizer} not recognized or implemented")
+        raise NotImplementedError
+
+    if args.d_optimizer == 'Adam':
+        optimizer_disc = tf.train.AdamOptimizer(learning_rate=d_lr, beta1=args.d_adam_beta1, beta2=args.d_adam_beta2)
+    elif args.d_optimizer == 'SGD':
+        optimizer_disc = tf.train.GradientDescentOptimizer(learning_rate=d_lr)
+    elif args.d_optimizer == 'Adadelta':
+        optimizer_disc = tf.train.AdadeltaOptimizer(learning_rate=d_lr, rho=args.d_rho, epsilon=1e-07)
+    elif args.d_optimizer == 'Momentum':
+        optimizer_disc = tf.train.MomentumOptimizer(learning_rate = d_lr, momentum = args.d_momentum, use_nesterov = True)
+    else:
+        print(f"ERROR: optimizer argument {args.d_optimizer} not recognized or implemented")
+        raise NotImplementedError
+
+    #optimizer_gen = tf.train.RMSPropOptimizer(learning_rate=g_lr)
+    #optimizer_disc = tf.train.RMSPropOptimizer(learning_rate=d_lr)
+    
+    # optimizer_gen = RAdamOptimizer(learning_rate=g_lr, beta1=args.beta1, beta2=args.beta2)
+    # optimizer_disc = RAdamOptimizer(learning_rate=d_lr, beta1=args.beta1, beta2=args.beta2)
+
+    return optimizer_gen, optimizer_disc
 
 def minimize_with_clipping(optimizer, loss, var_list, clipping):
     """Does minimization by calling compute_gradients and apply_gradients, but optionally clips the gradients in between.
@@ -35,7 +75,7 @@ def minimize_with_clipping(optimizer, loss, var_list, clipping):
     return train_op, gradients, variables, max_norm
 
 def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_image_input, latent_dim, alpha, phase,
-    num_phases, base_dim, base_shape, activation, leakiness, network_size, loss_fn, gp_weight, optim_strategy, g_clipping, d_clipping, noise_stddev):
+    base_shape, kernel_spec, filter_spec, activation, leakiness, loss_fn, gp_weight, optim_strategy, g_clipping, d_clipping, noise_stddev, freeze_vars=None):
     """Defines the op for a single optimization step.
     Parameters:
         optimizer_gen:
@@ -49,6 +89,7 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         num_phases:
         base_dim:
         base_shape:
+        kernel_shape: desired kernel shape (the spatial part, e.g. for 3D images, [3,3,3] would be a valid kernel_shape)
         activation:
         leakiness:
         network_size:
@@ -58,8 +99,9 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         g_clipping:
         d_clipping:
         noise_stddev:
+        freeze_vars: list of variables that will not be updated when the train_gen_freeze or train_disc_freese ops are called. Typically, this is the list of variables from previous phases
     Returns:
-        train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables
+        train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm, train_gen_freeze, g_gradients_freeze, g_variables_freeze, max_g_norm_freeze, train_disc_freeze, d_gradients_freeze, d_variables_freeze, max_d_norm_freeze
         train_gen: generator training op
         train_disc: discriminator training op
         gen_loss: generator loss
@@ -70,6 +112,16 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         g_variables: generator variables (names)
         d_gradients: discriminator gradients
         d_variables: discriminator variables (names)
+        max_g_norm:
+        max_d_norm:
+        train_gen_freeze: generator training op where freeze_vars are not updated (returns None if freeze_vars is undefined)
+        g_gradients_freeze: generator gradients for non-frozen variables (returns None if freeze_vars is undefined)
+        g_variables_freeze: generator variables
+        max_g_norm_freeze:
+        train_disc_freeze:
+        d_gradients_freeze:
+        d_variables_freeze:
+        max_d_norm_freeze:
     """
 
     # Perform forward steps of discriminator and generator simultaneously
@@ -81,12 +133,10 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             latent_dim,
             alpha,
             phase,
-            num_phases,
-            base_dim,
             base_shape,
+            kernel_spec, filter_spec,
             activation,
             leakiness,
-            network_size,
             loss_fn,
             gp_weight,
             noise_stddev
@@ -95,8 +145,22 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
         gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
         train_gen, g_gradients, g_variables, max_g_norm = minimize_with_clipping(optimizer_gen, gen_loss, gen_vars, g_clipping)
 
+        gen_vars_limited = None; train_gen_feeze = None; g_gradients_freeze = None; g_variables_freeze = None; max_g_norm_freeze = None
+        if freeze_vars is not None:
+            gen_vars_limited = [var for var in gen_vars if var.name not in [x.name for x in freeze_vars]]
+            print(f'gen_vars_limited: {gen_vars_limited}')
+            train_gen_freeze, g_gradients_freeze, g_variables_freeze, max_g_norm_freeze = minimize_with_clipping(optimizer_gen, gen_loss, gen_vars_limited, g_clipping)
+        
+
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
         train_disc, d_gradients, d_variables, max_d_norm = minimize_with_clipping(optimizer_disc, disc_loss, disc_vars, d_clipping)
+
+        disc_vars_limited = None; train_disc_freeze = None; d_gradients_freeze = None; d_variables_freeze = None; max_d_norm_freeze = None
+        if freeze_vars is not None:
+            disc_vars_limited = [var for var in disc_vars if var.name not in [x.name for x in freeze_vars]]
+            print(f'disc_vars_limited: {disc_vars_limited}')
+            train_disc_freeze, d_gradients_freeze, d_variables_freeze, max_d_norm_freeze = minimize_with_clipping(optimizer_disc, disc_loss, disc_vars_limited, d_clipping)
+        
 
     # Perform forward steps of discriminator and generator alternatingly
     elif optim_strategy == 'alternate':
@@ -108,12 +172,10 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             latent_dim,
             alpha,
             phase,
-            num_phases,
-            base_dim,
             base_shape,
+            kernel_spec, filter_spec,
             activation,
             leakiness,
-            network_size,
             loss_fn,
             gp_weight,
             noise_stddev,
@@ -122,6 +184,11 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
 
         disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='discriminator')
         train_disc, d_gradients, d_variables, max_d_norm = minimize_with_clipping(optimizer_disc, disc_loss, disc_vars, d_clipping)
+        
+        if freeze_vars is not None:
+            disc_vars_limited = [var for var in disc_vars if var.name not in [x.name for x in freeze_vars]]
+            print('disc_vars_limited: {disc_vars_limited}')
+            train_disc_freeze, d_gradients_freeze, d_variables_freeze, max_d_norm_freeze = minimize_with_clipping(optimizer_disc, disc_loss, disc_vars_limited, d_clipping)
 
         with tf.control_dependencies([train_disc]):
             gen_sample, gen_loss = forward_generator(
@@ -131,12 +198,10 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
                 latent_dim,
                 alpha,
                 phase,
-                num_phases,
-                base_dim,
                 base_shape,
+                kernel_spec, filter_spec,
                 activation,
                 leakiness,
-                network_size,
                 loss_fn,
                 noise_stddev,
                 is_reuse=True
@@ -145,10 +210,18 @@ def optimize_step(optimizer_gen, optimizer_disc, generator, discriminator, real_
             gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
             train_gen, g_gradients, g_variables, max_g_norm = minimize_with_clipping(optimizer_gen, gen_loss, gen_vars, g_clipping)
 
+            if freeze_vars is not None:
+                gen_vars_limited = [var for var in gen_vars if var.name not in [x.name for x in freeze_vars]]
+                print('gen_vars_limited: {gen_vars_limited}')
+                train_gen_freeze, g_gradients_freeze, g_variables_freeze, max_g_norm_freeze = minimize_with_clipping(optimizer_gen, gen_loss, gen_vars_limited, g_clipping)
+
     else:
         raise ValueError("Unknown optim strategy ", optim_strategy)
 
-    return train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, d_gradients, d_variables, max_g_norm, max_d_norm
+    return train_gen, train_disc, gen_loss, disc_loss, gp_loss, gen_sample, g_gradients, g_variables, \
+        d_gradients, d_variables, max_g_norm, max_d_norm, \
+        train_gen_freeze, g_gradients_freeze, g_variables_freeze, max_g_norm_freeze, \
+        train_disc_freeze, d_gradients_freeze, d_variables_freeze, max_d_norm_freeze
 
     # Op to update the learning rate according to a schedule
 def lr_update(lr, intra_phase_step, steps_per_phase, lr_max, lr_increase, lr_decrease, lr_rise_niter, lr_decay_niter):
