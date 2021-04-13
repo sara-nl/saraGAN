@@ -257,8 +257,8 @@ if __name__ == '__main__':
 
     # Architecture
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
-    parser.add_argument('--first_conv_nfilters', type=int, default=None, required=True, help='OBSOLETE! Replaced by kernel_spec & filter_spec. (Number of filters in the first convolutional layer. Since it is densely connected to the latent space, the number of connections can increase rapidly, hence it can be set separately from the other filter counts deeper in the network)')
-    parser.add_argument('--network_size', default=None, choices=['xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl'], required=True, help='OBSOLETE! Replaced by filter_spec')
+    parser.add_argument('--first_conv_nfilters', type=int, default=None, required=False, help='OBSOLETE! Replaced by kernel_spec & filter_spec. (Number of filters in the first convolutional layer. Since it is densely connected to the latent space, the number of connections can increase rapidly, hence it can be set separately from the other filter counts deeper in the network)')
+    parser.add_argument('--network_size', default=None, choices=['xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl'], required=False, help='OBSOLETE! Replaced by filter_spec')
     parser.add_argument('--activation', type=str, default='leaky_relu')
     parser.add_argument('--leakiness', type=float, default=0.2)
     parser.add_argument('--conv_kernel_size', type=none_or_int, nargs="+", default=[3,3,3], help="OBSOLETE! Replaced by kernel_spec & filter_spec. (Shape of the convolutional kernels to be used in convolution layers, e.g. --conv_kernel 3 3 3 will result in convolutional kernel of [3,3,3]. Note that if the data size is smaller than the kernel size in any dimension, the code will automatically shrink the kernel to largest odd kernel size that fits the data. E.g. with data of [4,4,2] and a kernel of [5,3,1], the effective kernel size will be [3,3,1]. Pass 'None' to have it optimized by Optuna)")
