@@ -342,6 +342,7 @@ def optuna_objective(trial, args, config):
                 # If the try failed, apparently not all layers are present in the current checkpoint file. Typically this means we are continueing with a new phase, 
                 # based on the checkpoint saved at the end of the previous phase.
                 except:
+                    print(f"It seems we are restoring from a checkpoint from a previous phase. You can ignore any prior TF warnings about variables not being found in the checkpoint file.")
                     restore_variables(sess, phase, args.starting_phase, logdir, args.continue_path, prev_vars, verbose, ema)                
             else:
                 if verbose:
