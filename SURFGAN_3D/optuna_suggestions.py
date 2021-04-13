@@ -248,7 +248,7 @@ def optuna_override_undefined(args, trial):
         for conv_j in range(0, len(args.filter_spec[phase_i])):
                 if args.filter_spec[phase_i][conv_j] is None or args.filter_spec[phase_i][conv_j] == "None":
                     # Suggest some power of two as number of filters
-                    args.filter_spec[phase_i][conv_j] = 2 ** trial.suggest_int(f"Filter_count_exponent_{phase_i}_{conv_j}", 1, max_filter_counts[phase_i])
+                    args.filter_spec[phase_i][conv_j] = 2 ** trial.suggest_int(f"Filter_count_exponent_{phase_i}_{conv_j}", 2, max_filter_counts[phase_i])
                     if verbose:
                         print(f"args.filter_spec[{phase_i}][{conv_j}] = {args.filter_spec[phase_i][conv_j]} (from: optuna trial)")
                 else:
@@ -261,7 +261,13 @@ def optuna_override_undefined(args, trial):
             for kernel_k in range(0, len(args.kernel_spec[phase_i][conv_j])):
                 if args.kernel_spec[phase_i][conv_j][kernel_k] is None or args.kernel_spec[phase_i][conv_j][kernel_k] == "None":
                     # Suggest some odd number as kernel size
-                    args.kernel_spec[phase_i][conv_j][kernel_k] = trial.suggest_int(f"Kernel_size_{phase_i}_{conv_j}_{kernel_k}", 1, 9, 2)
+                    if args.optuna_square_kernels: # pick kernel size the same along all dimensions
+                        if kernel_k == 0:
+                            args.kernel_spec[phase_i][conv_j][kernel_k] = trial.suggest_int(f"Kernel_size_{phase_i}_{conv_j}_{kernel_k}", 1, 7, 2)
+                        else:
+                            args.kernel_spec[phase_i][conv_j][kernel_k] = args.kernel_spec[phase_i][conv_j][0]
+                    else:
+                        args.kernel_spec[phase_i][conv_j][kernel_k] = trial.suggest_int(f"Kernel_size_{phase_i}_{conv_j}_{kernel_k}", 1, 7, 2)
                     if verbose:
                         print(f"args.kernel_spec[{phase_i}][{conv_j}][{kernel_k}] = {args.kernel_spec[phase_i][conv_j][kernel_k]} (from: optuna trial)")
                 else:

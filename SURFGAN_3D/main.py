@@ -347,6 +347,7 @@ if __name__ == '__main__':
     parser.add_argument('--optuna_CMA_consider_pruned_trials', default=False, action='store_true', help="Whether pruned trials are considered by the sampler. It is suggested to put this flag to False when the MedianPruner is used, but to put it to True when the HyperbandPruner is used. See official Optuna documentation.")
     parser.add_argument('--optuna_CMA_restart_strategy', default=None, type=none_or_str, choices=[None, 'ipop'], help="Restarting strategy for CMA-ES optimization when converges to a local minimum. None = no restart, ipop = restart with increasing population size")
     parser.add_argument('--optuna_CMA_inc_popsize', default=2, type=int, help="Multiplier for increasing population size before each restart. Will only be used if optuna_CMA_restart_strategy is ipop.")
+    parser.add_argument('--optuna_square_kernels', default=False, action='store_true', help="Let optuna only suggest square shaped kernels ([3,3,3], or [5,5,5], etc) when optimizing kernel shape. This reduces the number of degrees of freedom, and may be used to limit the NAS search space")
 
     # Input data normalization
     parser.add_argument('--data_mean', default=None, type=float, required=False, help="Mean of the input data. Used for input normalization. E.g. in the case of CT scans, this would be the mean CT value over all scans. Note: normalization is only performed if both data_mean and data_stddev are defined.")

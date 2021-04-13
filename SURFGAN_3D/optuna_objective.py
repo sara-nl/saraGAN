@@ -458,8 +458,8 @@ def optuna_objective(trial, args, config):
                 sess.run(ema_op)
 
                 # DEBUG:
-                dump_weight_for_debugging(sess)
-                dump_weight_for_debugging(sess, 'discriminator/discriminator_block_2/conv_2/weight:0')
+                #dump_weight_for_debugging(sess)
+                #dump_weight_for_debugging(sess, 'discriminator/discriminator_block_2/conv_2/weight:0')
 
                 # Run validation loss
                 if large_summary_bool or small_summary_bool:
