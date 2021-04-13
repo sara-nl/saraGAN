@@ -1,0 +1,31 @@
+#SBATCH -p gpu_titanrtx_shared
+#SBATCH -n 1
+#SBATCH --ntasks-per-node 1
+#SBATCH --gpus=1
+#SBATCH -c 6
+#SBATCH -t 10:00
+
+
+# ==============
+# CONFIGURABLES:
+# ==============
+SURFGAN_ROOT=/home/${USER}/NKI/saraGAN/SURFGAN_3D
+NETWORK_ARCH=pgan
+MODEL_PATH=${SURFGAN_ROOT}/runs/pgan/20210311_102301/model_4
+export OMP_NUM_THREADS=5
+export KMP_SETTINGS=True
+export KMP_AFFINITY="granularity=fine,compact,1,0"
+export TF_USE_CUDNN=1
+
+source ~/.virtualenvs/surfgan/bin/activate
+module purge
+module load 2019
+module load Horovod/0.19.4-fosscuda-2019b-TensorFlow-1.15.3-Python-3.6.6
+echo "Loaded modules:"
+module list
+
+mpirun python -u generate_minimal.py $NETWORK_ARCH --model_path ${MODEL_PATH}  --output_dir ${MODEL_PATH} \
+--start_shape '(1, 5, 16, 16)' --final_shape '(1, 160, 512, 512)' \
+--phase 4 --data_mean 1024 --data_stddev 1024 \
+--latent_dim 128 --first_conv_nfilters 128 --network_size s \
+--kernel_spec kernel_spec.json --filter_spec kernel_spec.json  --num_samples 10

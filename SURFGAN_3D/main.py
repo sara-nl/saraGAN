@@ -6,6 +6,7 @@ import horovod.tensorflow as hvd
 import time
 import random
 import optuna
+import json
 
 from utils import get_verbosity, print_study_summary
 from mpi4py import MPI
@@ -28,7 +29,7 @@ def main(args, config):
     optuna.logging.set_verbosity(optuna.logging.DEBUG)
 
     # Raised errors that should be caught, but trials should just continue (errors are e.g. thrown when OOM)
-    catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError)
+    catchErrorsInTrials = (tf.errors.UnknownError, tf.errors.InternalError, tf.errors.InvalidArgumentError, tf.errors.ResourceExhaustedError)
 
     # We support several types of runs:
     # Load hyperparameters from the best trial in an optuna database, do a (potentially data-parallel) convergence run
@@ -40,11 +41,17 @@ def main(args, config):
     # Normal run, no hyperparameter tuning. Do a (potentially data-parallel) convergence run
     normal_run = (not run_from_best_trial) and (not hyperparam_opt_inter_trial) and not (run_from_best_trial or hyperparam_opt_inter_trial or hyperparam_opt_intra_trial)
 
+    multi_objective = (args.optuna_sampler == 'NSGAII' or args.optuna_sampler == 'MOTPE')
+
     # Select the correct pruner based on args:
     if args.optuna_pruner == 'median':
         if verbose:
             print("Creating study with MedianPruner()")
         current_pruner = optuna.pruners.MedianPruner(n_startup_trials=10)
+    elif args.optuna_pruner == 'SHA':
+        if verbose:
+            print("Creating study with SuccessiveHalvingPruner()")
+        current_pruner = optuna.pruners.SuccessiveHalvingPruner()
     elif args.optuna_pruner == 'nopruner':
         if verbose:
             print("Creating study with NopPruner()")
@@ -52,6 +59,29 @@ def main(args, config):
     else:
         print("No valid pruner specified")
         raise NotImplementedError
+
+    if args.optuna_sampler == 'TPE':
+        if verbose:
+            print("Creating study with TPE sampler")
+        current_sampler = optuna.samplers.TPESampler(multivariate=args.optuna_TPE_multivariate)
+    elif args.optuna_sampler == 'random':
+        if verbose:
+            print("Creating study with random sampler")
+        current_sampler = optuna.samplers.RandomSampler()
+    elif args.optuna_sampler == 'CMA':
+        if verbose:
+            print("Creating study with CmaEs sampler")
+        current_sampler = optuna.samplers.CmaEsSampler(consider_pruned_trials = args.optuna_CMA_consider_pruned_trials, 
+                                                       restart_strategy = args.optuna_CMA_restart_strategy,
+                                                       inc_popsize = args.optuna_CMA_inc_popsize)
+    elif args.optuna_sampler == 'NSGAII':
+        if verbose:
+            print("Creating study with NSGAII sampler")
+        current_sampler = optuna.samplers.NSGAIISampler()
+    elif args.optuna_sampler == 'MOTPE':
+        if verbose:
+            print("Creating study with MOTPE sampler")
+        current_sampler = optuna.samplers.MOTPESampler()
 
     if normal_run:
         if verbose:
@@ -106,10 +136,15 @@ def main(args, config):
         study = None
         if hvd.rank() == 0:
             print("Storing SQlite database for optuna at %s" %storage_sqlite)
-
-            study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite, load_if_exists = True,
-                pruner=current_pruner
+            if multi_objective:
+                # We optimize on [metric, time-to-train], so we want to minimize both
+                study = optuna.create_study(directions = ["minimize", "minimize"], study_name = study_name, storage = storage_sqlite, load_if_exists = True,
+                pruner = current_pruner, sampler = current_sampler
             )
+            else:
+                study = optuna.create_study(direction = "minimize", study_name = study_name, storage = storage_sqlite, load_if_exists = True,
+                    pruner = current_pruner, sampler = current_sampler
+                )
     
         # Call a barrier to make sure the study has been created before the other workers load it
         MPI.COMM_WORLD.Barrier()
@@ -119,7 +154,7 @@ def main(args, config):
 
         # Then, make all other workers load the study
         if hvd.rank() != 0:
-            study = optuna.load_study(study_name = study_name, storage = storage_sqlite, pruner = current_pruner)
+            study = optuna.load_study(study_name = study_name, storage = storage_sqlite, pruner = current_pruner, sampler = current_sampler)
         
         if args.optuna_ntrials is not None:
             ntrials = np.ceil(args.optuna_ntrials/hvd.size())
@@ -139,7 +174,7 @@ def main(args, config):
         # Make sure not all studies start loading at the same time... stagger by 1s per rank
         time.sleep(hvd.rank())
         
-        study = optuna.load_study(study_name = args.optuna_study_name, storage = args.optuna_storage, pruner = current_pruner)
+        study = optuna.load_study(study_name = args.optuna_study_name, storage = args.optuna_storage, pruner = current_pruner, sampler = current_sampler)
 
         if args.optuna_ntrials is not None:
             ntrials = args.optuna_ntrials
@@ -172,6 +207,30 @@ def main(args, config):
         print_study_summary(study)
 
 if __name__ == '__main__':
+
+    # To be able to pass a NoneType on the commandline:
+    def none_or_str(value):
+        if value == 'None':
+            return None
+        return str(value)
+    def none_or_float(value):
+        if value == 'None':
+            return None
+        return float(value)
+    def none_or_int(value):
+        if value == 'None':
+            return None
+        return int(value)
+
+    def kernel_spec(value):
+        with open(value) as json_file:
+            data = json.load(json_file)
+        return data['kernel_spec']
+    def filter_spec(value):
+        with open(value) as json_file:
+            data = json.load(json_file)
+        return data['filter_spec']
+
     parser = argparse.ArgumentParser()
     parser.add_argument('architecture', type=str)
     parser.add_argument('dataset_path', type=str)
@@ -198,18 +257,21 @@ if __name__ == '__main__':
 
     # Architecture
     parser.add_argument('--latent_dim', type=int, default=None, required=True)
-    parser.add_argument('--first_conv_nfilters', type=int, default=None, required=True, help='Number of filters in the first convolutional layer. Since it is densely connected to the latent space, the number of connections can increase rapidly, hence it can be set separately from the other filter counts deeper in the network')
-    parser.add_argument('--network_size', default=None, choices=['xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl'], required=True)
+    parser.add_argument('--first_conv_nfilters', type=int, default=None, required=True, help='OBSOLETE! Replaced by kernel_spec & filter_spec. (Number of filters in the first convolutional layer. Since it is densely connected to the latent space, the number of connections can increase rapidly, hence it can be set separately from the other filter counts deeper in the network)')
+    parser.add_argument('--network_size', default=None, choices=['xxs', 'xs', 's', 'm', 'l', 'xl', 'xxl'], required=True, help='OBSOLETE! Replaced by filter_spec')
     parser.add_argument('--activation', type=str, default='leaky_relu')
     parser.add_argument('--leakiness', type=float, default=0.2)
+    parser.add_argument('--conv_kernel_size', type=none_or_int, nargs="+", default=[3,3,3], help="OBSOLETE! Replaced by kernel_spec & filter_spec. (Shape of the convolutional kernels to be used in convolution layers, e.g. --conv_kernel 3 3 3 will result in convolutional kernel of [3,3,3]. Note that if the data size is smaller than the kernel size in any dimension, the code will automatically shrink the kernel to largest odd kernel size that fits the data. E.g. with data of [4,4,2] and a kernel of [5,3,1], the effective kernel size will be [3,3,1]. Pass 'None' to have it optimized by Optuna)")
+    parser.add_argument('--kernel_spec', type=kernel_spec, default = None, help = "A kernel specification file (in JSON) that lists the convolutional kernel shapes to be used in each layer. The JSON file should define this under the 'kernel_spec' keyword.")
+    parser.add_argument('--filter_spec', type=filter_spec, default = None, help = "A specification file (in JSON) that lists the amount of filters to be used in each layer. The JSON file should define this under the 'filter_spec' keyword. Note that the kernel_spec and filter_spec may be stored in the same JSON, but you will have to supply both arguments.")
 
     # Learning rate
     parser.add_argument('--g_lr', type=float, default=None)
     parser.add_argument('--d_lr', type=float, default=None)
-    parser.add_argument('--g_lr_increase', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to g_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of g_lr')
-    parser.add_argument('--g_lr_decrease', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from g_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of g_lr')
-    parser.add_argument('--d_lr_increase', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to d_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of d_lr')
-    parser.add_argument('--d_lr_decrease', type=str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from d_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of d_lr')
+    parser.add_argument('--g_lr_increase', type=none_or_str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to g_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of g_lr')
+    parser.add_argument('--g_lr_decrease', type=none_or_str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from g_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of g_lr')
+    parser.add_argument('--d_lr_increase', type=none_or_str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually increase to d_lr at the start of each phase, and if so, if this should happen linearly or exponentially. For exponential increase, the starting value is 1% of d_lr')
+    parser.add_argument('--d_lr_decrease', type=none_or_str, choices=[None, 'linear', 'exponential'], default=None, help='Defines if the learning rate should gradually decrease from d_lr at the end of each phase, and if so, if this should happen linearly or exponentially. For exponential decrease, the final value is 1% of d_lr')
     parser.add_argument('--g_lr_rise_niter', type=int, default=None, help='If a learning rate schedule with a gradual increase in the beginning of a phase is defined for the generator, this number defines within how many iterations the maximum is reached.')
     parser.add_argument('--g_lr_decay_niter', type=int, default=None, help='If a learning rate schedule with a gradual decrease at the end of a phase is defined for the generator, this defines within how many iterations the minimum is reached.')
     parser.add_argument('--d_lr_rise_niter', type=int, default=None, help='If a learning rate schedule with a gradual increase in the beginning of a phase is defined for the discriminator, this number defines within how many iterations the maximum is reached.')
@@ -225,11 +287,27 @@ if __name__ == '__main__':
     parser.add_argument('--g_clipping', default=False, type=bool)
     parser.add_argument('--d_clipping', default=False, type=bool)
     parser.add_argument('--optim_strategy', default='simultaneous', choices=['simultaneous', 'alternate'])
-    parser.add_argument('--beta1', type=float, default=0)
-    parser.add_argument('--beta2', type=float, default=0.9)
     parser.add_argument('--use_adasum', default=False, action='store_true')
     parser.add_argument('--ema_beta', type=float, default=0.99)
     parser.add_argument('--noise_stddev', default=None, type=float, required=True, help="Normally distributed noise is added to the inputs before training ('instance noise', see e.g. https://www.inference.vc/instance-noise-a-trick-for-stabilising-gan-training/). This argument specifies the standard deviation of that normal distribution, and thus the magnitude of that noise. Adding noise that is of the same order as the real noise in your image likely has the best effect.")
+    parser.add_argument('--optimizer', type=none_or_str, choices=[None, 'Adam', 'SGD', 'Momentum', 'Adadelta'], default='Adam')
+    parser.add_argument('--d_use_different_optimizer', default=False, action='store_true', help="If specified, a different optimizer is used for the discriminator (--d_optimizer) than for the generator (--optimizer). Otherwise, the optimizer passed to --optimizer will be used for both the generator and discriminator")
+    parser.add_argument('--d_optimizer', type=none_or_str, choices=[None, 'Adam', 'SGD', 'Momentum', 'Adadelta'], default='Adam', help="Only respected if --use_different_optimizer is passed")
+    # Optimizer parameters (Adam)
+    parser.add_argument('--adam_beta1', type=none_or_float, default=0)
+    parser.add_argument('--d_use_different_beta1', default=False, action='store_true', help="If specified, a different beta1 is used for the discriminator (--d_adam_beta1) than for the generator (--adam_beta1). Otherwise, the beta1 passed to --adam_beta1 will be used for both the generator and discriminator")
+    parser.add_argument('--d_adam_beta1', type=none_or_float, default=0, help="Only respected if --d_use_different_beta1 is passed")
+    parser.add_argument('--adam_beta2', type=none_or_float, default=0.9)
+    parser.add_argument('--d_use_different_beta2', default=False, action='store_true', help="If specified, a different beta2 is used for the discriminator (--d_adam_beta2) than for the generator (--adam_beta2). Otherwise, the beta2 passed to --adam_beta2 will be used for both the generator and discriminator")
+    parser.add_argument('--d_adam_beta2', type=none_or_float, default=0.9, help="Only respected if --d_use_different_beta2 is passed")
+    # Optimizer parameters (Adadelta)
+    parser.add_argument('--rho', type=none_or_float, default=0.95)
+    parser.add_argument('--d_use_different_rho', default=False, action='store_true', help="If specified, a different rho is used for the discriminator (--d_rho) than for the generator (--rho). Otherwise, the rho passed to --rho will be used for both the generator and discriminator")
+    parser.add_argument('--d_rho', type=none_or_float, default=0.95, help="Only respected if --d_use_different_rho is passed")
+    # Optimizer parameters (SGD+Momentum)
+    parser.add_argument('--momentum', type=none_or_float, default=0.9)
+    parser.add_argument('--d_use_different_momentum', default=False, action='store_true', help="If specified, a different momentum is used for the discriminator (--d_momentum) than for the generator (--momentum). Otherwise, the momentum passed to --momentum will be used for both the generator and discriminator")
+    parser.add_argument('--d_momentum', type=none_or_float, default=0.9)
 
     # Not sure if these do anything anymore...
     parser.add_argument('--g_annealing', default=1,
@@ -260,8 +338,15 @@ if __name__ == '__main__':
     parser.add_argument('--optuna_use_best_trial', default=False, action='store_true', help="Use the best trial from the database passed as optuna_storage")
     parser.add_argument('--optuna_storage', default=None, type=str, help="An Optuna DB file")
     parser.add_argument('--optuna_study_name', default=None, type=str, help="Name of the optuna study in the Optuna DB file")
-    parser.add_argument('--optuna_pruner', default='median', choices=['median', 'nopruner'], help="Select which pruner is used by Optuna")
+    parser.add_argument('--optuna_pruner', default='median', choices=['median', 'SHA', 'nopruner'], help="Select which pruner is used by Optuna")
+    parser.add_argument('--optuna_sampler', default='TPE', choices=['random', 'TPE', 'CMA', 'NSGAII', 'MOTPE'], help="Select which sampler is used by Optuna")
     parser.add_argument('--optuna_warmup_steps', default=20000, type=int, help="Pruning is only considered after this amount of images has been trained on (globally, in case of data-parallel training). This warmup period is applied in each resolution phase. I.e. if optuna_warmup_steps=20000, for the first 20000 images in each resolution phase, no trial will be pruned.")
+    # Optuna TPE sampler
+    parser.add_argument('--optuna_TPE_multivariate', default=False, action='store_true', help="Pass this argument if you want the TPE sampler to use a multivariate kernel density estimator (WARNING: had bugs in optuna-2.3.0, https://github.com/optuna/optuna/issues/2391). Otherwise, a TPE sample with multivariate kernel density estimater is constructed")
+    # Optuna CMA sampler
+    parser.add_argument('--optuna_CMA_consider_pruned_trials', default=False, action='store_true', help="Whether pruned trials are considered by the sampler. It is suggested to put this flag to False when the MedianPruner is used, but to put it to True when the HyperbandPruner is used. See official Optuna documentation.")
+    parser.add_argument('--optuna_CMA_restart_strategy', default=None, type=none_or_str, choices=[None, 'ipop'], help="Restarting strategy for CMA-ES optimization when converges to a local minimum. None = no restart, ipop = restart with increasing population size")
+    parser.add_argument('--optuna_CMA_inc_popsize', default=2, type=int, help="Multiplier for increasing population size before each restart. Will only be used if optuna_CMA_restart_strategy is ipop.")
 
     # Input data normalization
     parser.add_argument('--data_mean', default=None, type=float, required=False, help="Mean of the input data. Used for input normalization. E.g. in the case of CT scans, this would be the mean CT value over all scans. Note: normalization is only performed if both data_mean and data_stddev are defined.")
@@ -311,6 +396,18 @@ if __name__ == '__main__':
         args.d_lr_decay_niter = int(args.stabilizing_nimg/2)
         if verbose:
             print(f"Decreasing learning rate requested for the discriminator, but no number of iterations was specified for the increase (d_lr_decay_niter). Defaulting to {args.d_lr_decay_niter}.")
+
+    # Set arguments for discriminator optimizer, unless explicitely stated that the discriminator should have different values from the generator
+    if not args.d_use_different_optimizer:
+        args.d_optimizer = args.optimizer
+    if not args.d_use_different_beta1:
+        args.d_adam_beta1 = args.adam_beta1
+    if not args.d_use_different_beta2:
+        args.d_adam_beta2 = args.adam_beta2
+    if not args.d_use_different_rho:
+        args.d_rho = args.rho
+    if not args.d_use_different_momentum:
+        args.d_momentum = args.momentum
 
     if args.architecture in ('stylegan2'):
         assert args.starting_phase == args.ending_phase
