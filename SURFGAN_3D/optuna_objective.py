@@ -126,8 +126,16 @@ def optuna_objective(trial, args, config):
         # Get DataLoader
         batch_size = max(1, args.base_batch_size // (2 ** (phase - 1)))
 
+        # If global batch size would exceed args.max_global_batch_size, cap it
+        if args.max_global_batch_size is not None:
+            max_local_batch_size = args.max_global_batch_size / global_size
+            if (batch_size > max_local_batch_size):
+                batch_size = max_local_batch_size
+                if verbose:
+                    print(f"Capped local batch size at {max_local_batch_size} since we run with {global_size} workers and a global maximum batch size of {args.max_global_batch_size} was set.")
+            assert batch_size * global_size <= args.max_global_batch_size
+
         if phase >= args.starting_phase:
-            # assert batch_size * global_size <= args.max_global_batch_size
             if verbose:
                 print(f"Using local batch size of {batch_size} and global batch size of {batch_size * global_size}")
 

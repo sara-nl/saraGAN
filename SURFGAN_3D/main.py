@@ -240,7 +240,7 @@ if __name__ == '__main__':
     parser.add_argument('--ending_phase', type=int, default=None, required=True)
     parser.add_argument('--scratch_path', type=str, default=None, required=True)
     parser.add_argument('--base_batch_size', type=int, default=None, help='batch size used in phase 1')
-    parser.add_argument('--max_global_batch_size', type=int, default=256)
+    parser.add_argument('--max_global_batch_size', type=int, default=None, help='Can cap the global batch size. E.g. with base_batch_size = 32, 4 horovod workers, and a max_global_batch_size = 64, batch size in the first phase would be 64, in the second phase 64, third phase 32, fourth phase 16, etc. Can be used to prevent that ')
     parser.add_argument('--mixing_nimg', type=int, default=2 ** 19)
     parser.add_argument('--stabilizing_nimg', type=int, default=2 ** 19)
     parser.add_argument('--seed', type=int, default=42)
