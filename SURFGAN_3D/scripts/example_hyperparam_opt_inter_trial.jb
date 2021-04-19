@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -N 1
+#SBATCH -N 4
 #SBATCH -c 6
 #SBATCH --ntasks-per-node=4
 ###SBATCH --gres=gpu:1
@@ -14,7 +14,7 @@ DATETIME=$(date "+%Y%m%d_%H%M%S")
 # ==============
 SURFGAN_ROOT=/home/${USER}/NKI/saraGAN/SURFGAN_3D
 NETWORK_ARCH=pgan
-CONTINUE_PATH=${SURFGAN_ROOT}/runs/pgan/20201216_031638/model_1
+CONTINUE_PATH=${SURFGAN_ROOT}/runs/pgan/20210202_174752/model_1
 # Place to store tf.summaries and model checkpoints:
 LOGDIR=${SURFGAN_ROOT}/runs/${NETWORK_ARCH}/${DATETIME}
 # Place where this jobscript will be logged
@@ -63,11 +63,12 @@ module list
 mpirun --report-bindings --map-by ppr:2:socket:PE=6 -x NCCL_DEBUG=INFO -x HOROVOD_MPI_THREADS_DISABLE=1 -x LD_LIBRARY_PATH -x PATH -x TF_USE_CUDNN -x OMP_NUM_THREADS \
 python -u main.py $NETWORK_ARCH /nfs/radioct/14_pgan/npy/average/ --start_shape '(1, 5, 16, 16)' --final_shape '(1, 160, 512, 512)' --scratch_path /scratch/$USER --logdir $LOGDIR \
 --gpu --num_inter_ops 1 --data_mean 1024 --data_stddev 1024 \
---starting_phase 1 --ending_phase 5 --mixing_nimg 131072 --stabilizing_nimg 131072 \
+--starting_phase 1 --ending_phase 1 --mixing_nimg 131072 --stabilizing_nimg 131072 \
 --latent_dim 128 --first_conv_nfilters 128 --network_size s --starting_alpha 1 --loss_fn wgan --gp_weight 10 --noise_stddev 0.01 \
---optuna_distributed \
---checkpoint_every_nsteps 50000 --summary_large_every_nsteps 128 --summary_small_every_nsteps 64 \
---calc_metrics --metrics_every_nsteps 4048 --compute_FID --metrics_batch_size=32 --num_metric_samples 32
+--optuna_distributed --optuna_warmup_steps 20000 --optuna_pruner 'nopruner' \
+--checkpoint_every_nsteps 50000 --summary_large_every_nsteps 4096 --summary_small_every_nsteps 2048 \
+--calc_metrics --metrics_every_nsteps 10240 --compute_FID --metrics_batch_size 265 --num_metric_samples 265 \
+--adam_beta1 None --adam_beta2 None
 # You can optionally specify the optuna_storage and optuna_study_name arguments. This allows you e.g. to resume a previous hyperparameter optimization to add more trials. E.g.
 # --optuna_storage = 'sqlite:////home/casparl/NKI/saraGAN/SURFGAN_3D/runs/pgan/20201210_125538/optuna.db' --optuna_study_name 'optuna_20201210_115549'
 # If no optuna_storage and optuna_study_name are specified, the code will create new ones based on a time stamp. The name and storage location will be printed to stdout at the start of the run.
