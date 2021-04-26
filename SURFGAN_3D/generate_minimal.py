@@ -26,8 +26,8 @@ def main(args, config):
 
     real_image_input = tf.placeholder(shape=get_current_input_shape(args.phase, args.batch_size, args.start_shape), dtype=tf.float32)
     z = tf.random.normal(shape=[tf.shape(real_image_input)[0], args.latent_dim])
-    gen_sample = generator(z, alpha, args.phase, get_num_phases(args.start_shape, args.final_shape),
-                           args.first_conv_nfilters, get_base_shape(args.start_shape), activation=args.activation, kernel_shape=args.kernel_shape, kernel_spec = args.kernel_spec, filter_spec = args.filter_spec, 
+    gen_sample = generator(z, alpha, args.phase, get_base_shape(args.start_shape), activation=args.activation, 
+                           kernel_spec = args.kernel_spec, filter_spec = args.filter_spec, 
                            param=args.leakiness, size=args.network_size, is_reuse=False)
 
     gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope='generator')
@@ -47,7 +47,10 @@ def main(args, config):
         # Fake images are always generated with the batch size used for training
         # Here, we loop often enough to make sure we have enough samples for the batch size that we want to use for metric computation
         fake_batch = sess.run(gen_sample).astype(np.float32)
+        i=0
         while fake_batch.shape[0] < args.num_samples:
+            i=i+1
+            print(f'Generating sample {i}')
             fake_batch = np.concatenate((fake_batch, sess.run(gen_sample).astype(np.float32)))
 
         print(f'Minimum of generated image 1 before inverting normalization: {np.min(fake_batch[0,...])}')
