@@ -254,7 +254,7 @@ class NumpyPathDataset:
     def _load_batch_from_filelist(self, batch_paths):
         """Takes a list of numpy files, loads the numpy files, stacks them, and inserts an extra color channel"""
 
-        batch = [np.load(path) for path in batch_paths]
+        batch = [np.load(path).astype('float32') for path in batch_paths]
         if len(batch) > 0:
             batch = np.stack(batch)
             batch = batch[:, np.newaxis, ...]
