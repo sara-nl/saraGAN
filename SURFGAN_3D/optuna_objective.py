@@ -500,10 +500,10 @@ def optuna_objective(trial, args, config):
                     if args.calc_metrics:
                         # if verbose:
                             # print('Computing and writing metrics...')
-                        metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose)
+                        metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, hyperparam_opt_inter_trial, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose)
                         # Compute and save metrics based on EMA weights
                         sess.run(assign_ema_weights)
-                        metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose, suffix='_EMA')
+                        metrics = save_metrics(writer, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, hyperparam_opt_inter_trial, get_compute_metrics_dict(args), num_metric_samples, args.data_mean, args.data_stddev, verbose, suffix='_EMA')
                         sess.run(restore_original_weights)
 
                         # Optuna pruning and return value:
@@ -599,7 +599,7 @@ def optuna_objective(trial, args, config):
             sess.run(assign_ema_weights)
             if args.compute_metrics_test:
                 start_metrics_test = time.time()
-                metrics_test = save_metrics(None, sess, npy_data_test, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_test), args.data_mean, args.data_stddev, verbose)
+                metrics_test = save_metrics(None, sess, npy_data_test, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, hyperparam_opt_inter_trial, get_compute_metrics_dict(args), len(npy_data_test), args.data_mean, args.data_stddev, verbose)
                 end_metrics_test = time.time()
                 if verbose:
                     print(f"Computing metrics on test set took {end_metrics_test - start_metrics_test} seconds")
@@ -607,7 +607,7 @@ def optuna_objective(trial, args, config):
                     print(metrics_test)
             if args.compute_metrics_validation:
                 start_metrics_val = time.time()
-                metrics_val = save_metrics(None, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_validation), args.data_mean, args.data_stddev, verbose)
+                metrics_val = save_metrics(None, sess, npy_data_validation, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, hyperparam_opt_inter_trial, get_compute_metrics_dict(args), len(npy_data_validation), args.data_mean, args.data_stddev, verbose)
                 end_metrics_val = time.time()
                 if verbose:
                     print(f"Computing metrics on validation set took {end_metrics_val - start_metrics_val} seconds")
@@ -620,7 +620,7 @@ def optuna_objective(trial, args, config):
                     last_fid = None
             if args.compute_metrics_train:
                 start_metrics_train = time.time()
-                metrics_train = save_metrics(None, sess, npy_data_train, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, get_compute_metrics_dict(args), len(npy_data_train), args.data_mean, args.data_stddev, verbose)
+                metrics_train = save_metrics(None, sess, npy_data_train, gen_sample, args.metrics_batch_size, global_size, global_step, get_xy_dim(phase, args.start_shape), args.horovod, hyperparam_opt_inter_trial, get_compute_metrics_dict(args), len(npy_data_train), args.data_mean, args.data_stddev, verbose)
                 end_metrics_train = time.time()
                 if verbose:
                     print(f"Computing metrics on training set took {end_metrics_train - start_metrics_train} seconds")
