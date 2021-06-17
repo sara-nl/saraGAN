@@ -343,7 +343,7 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
         raise Exception("ERROR: either volumes_batch_real.ndim (%s) or volumes_batch_fake.ndim (%s) is not equal to 5." % (volumes_batch_real.ndim,  volumes_batch_fake.ndim))
 
     if data_format == 'NCDHW':
-
+        #print("DEBUG: Transposing images")
         volumes_batch_real = np.transpose(volumes_batch_real, [0, 2, 3, 4, 1])
         volumes_batch_fake = np.transpose(volumes_batch_fake, [0, 2, 3, 4, 1])
 
@@ -369,6 +369,7 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
     
     activations_real = []
     activations_fake = []
+    #print("DEBUG: get activations")
     for i in range(len(volumes_batch_fake)):
         # print("DEBUG: Getting activations for volumes %i" % i)
 
@@ -381,13 +382,13 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
             print("WARNING: it looks like your real input images are unnormalized. This may result in inaccurate FID calculations: "
             "the inception network assumes inputs in the range [0,255] and this code assumes a standard normalized input in order "
             "to map to this range. Please implement your own mapping to replace the call to data.stdnormal_to_8bit_numpy() in fid_new.py")
-
         act_real = get_activations_from_volume(volumes_batch_real[i], sess, batch_size = batch_size)
         act_fake = get_activations_from_volume(volumes_batch_fake[i], sess, batch_size = batch_size)
 
         activations_real.append(act_real)
         activations_fake.append(act_fake)
 
+    #print("DEBUG: stack")
     activations_real = np.stack(activations_real)
     activations_fake = np.stack(activations_fake)
 
@@ -398,6 +399,7 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
     # Since this is in a for loop AND in a function that gets called many times during training,
     # we first try to get the tensors from the default_graph to see if they already exist.
     # If not, they are created. That should only happen the very first time the FID is computed.
+
     try:
         activations1 = tf.get_default_graph().get_tensor_by_name("activations1:0")
         activations2 = tf.get_default_graph().get_tensor_by_name("activations2:0")
@@ -413,9 +415,11 @@ def calculate_fid_given_batch_volumes(volumes_batch_real, volumes_batch_fake, se
     # what if I just reshape the activations_real and activations_fake so as to merge the dimensions that represent the CT ([0]), and the individual slice in the CT ([1])?
     # E.g. if activations_real.shape = (2, 20, 2048) (= batch_size, z-slices, activations), we reshape to (40, 2048). 
     # That way, we just compute the FID based on the activations from each z-slice, where we treat the z-slices completely independently
+    #print("DEBUG: reshape")
     activations_real = activations_real.reshape(-1, activations_real.shape[-1])
     activations_fake = activations_fake.reshape(-1, activations_fake.shape[-1])
 
+    #print("DEBUG: compute FID from activations")
     fids = sess.run(fcd, feed_dict = {activations1: activations_real, activations2: activations_fake})
 
     # # WARNING: I think this call is causing the problem with "cuSolverDN call failed with status =6" as soon as the batch size goes to 1.
